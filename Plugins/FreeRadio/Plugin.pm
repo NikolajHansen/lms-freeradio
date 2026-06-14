@@ -82,8 +82,6 @@ sub initPlugin {
 		name => 'PLUGIN_FREERADIO',
 	});
 
-	Slim::Music::Import->addImporter('Plugins::FreeRadio::Importer', { use => 1 });
-
 	# Trigger initial sync on startup
 	Slim::Utils::Timers::setTimer(undef, time() + 2, \&triggerSync);
 }

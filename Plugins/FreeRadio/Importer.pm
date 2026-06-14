@@ -14,14 +14,17 @@ my $log = Slim::Utils::Log->addLogCategory({
 sub initPlugin {
 	my $class = shift;
 
-	# don't run importer if we're doing a singledir scan
+	# don't run importer if we're doing a singledir scan (unless explicitly for freeradio)
 	return if main::SCANNER && $ARGV[-1] && 'freeradio' ne $ARGV[-1];
 
+	# Register this importer to be called during scanner runs
 	Slim::Music::Import->addImporter($class, {
 		type   => 'post',
 		weight => 50,
 		'use'  => 1,
 	});
+
+	main::INFOLOG && $log->is_info && $log->info('FreeRadio importer registered');
 }
 
 sub startScan {
