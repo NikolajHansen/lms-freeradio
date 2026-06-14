@@ -52,3 +52,4 @@ FreeRadio is a Lyrion Music Server (LMS) plugin that provides a free internet ra
 - `Plugins/FreeRadio/Cache.pm` – LRU+TTL cache
 - `Plugins/FreeRadio/Provider/*` – provider modules
 - `extensions.xml` – Additional Repositories feed entry
+# FreeRadio LMS Plugin
