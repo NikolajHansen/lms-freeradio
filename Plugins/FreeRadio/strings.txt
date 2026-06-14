@@ -1,0 +1,53 @@
+PLUGIN_FREERADIO
+	EN	FreeRadio
+
+PLUGIN_FREERADIO_DESC
+	EN	Free internet radio directory powered by Icecast and SHOUTcast.
+
+PLUGIN_FREERADIO_SEARCH
+	EN	Search Stations
+
+PLUGIN_FREERADIO_BROWSE_GENRE
+	EN	Browse by Genre
+
+PLUGIN_FREERADIO_BROWSE_COUNTRY
+	EN	Browse by Country
+
+PLUGIN_FREERADIO_BROWSE_SOURCE
+	EN	Browse by Source
+
+PLUGIN_FREERADIO_FAVORITES
+	EN	Favorites
+
+PLUGIN_FREERADIO_ADD_FAVORITE
+	EN	Add to Favorites
+
+PLUGIN_FREERADIO_REMOVE_FAVORITE
+	EN	Remove Favorite
+
+PLUGIN_FREERADIO_FAVORITE_ADDED
+	EN	Added to favorites.
+
+PLUGIN_FREERADIO_FAVORITE_REMOVED
+	EN	Removed from favorites.
+
+PLUGIN_FREERADIO_ENTER_SEARCH
+	EN	Enter a search query.
+
+PLUGIN_FREERADIO_INDEXING_HINT
+	EN	Directory indexing is running. Results appear when provider sync completes.
+
+PLUGIN_FREERADIO_REFRESH_INTERVAL
+	EN	Refresh interval (minutes)
+
+PLUGIN_FREERADIO_REFRESH_INTERVAL_DESC
+	EN	How often station data should refresh from providers.
+
+PLUGIN_FREERADIO_SHOUTCAST_API_KEY
+	EN	SHOUTcast API key
+
+PLUGIN_FREERADIO_SHOUTCAST_API_KEY_DESC
+	EN	Required for SHOUTcast provider API calls.
+
+PLUGIN_FREERADIO_SYNC_NOW
+	EN	Sync Now

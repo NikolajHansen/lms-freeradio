@@ -1,0 +1,15 @@
+[% PROCESS settings/header.html %]
+
+	[% WRAPPER setting title="PLUGIN_FREERADIO_REFRESH_INTERVAL" desc="PLUGIN_FREERADIO_REFRESH_INTERVAL_DESC" %]
+		<input type="number" class="stdedit" min="30" max="1440" name="pref_refresh_interval_mins" value="[% prefs.pref_refresh_interval_mins | html %]">
+	[% END %]
+
+	[% WRAPPER setting title="PLUGIN_FREERADIO_SHOUTCAST_API_KEY" desc="PLUGIN_FREERADIO_SHOUTCAST_API_KEY_DESC" %]
+		<input type="text" class="stdedit" name="pref_shoutcast_api_key" value="[% prefs.pref_shoutcast_api_key | html %]">
+	[% END %]
+
+	[% WRAPPER settingSection %]
+		<input type="submit" class="stdclick" name="syncNow" value="[% "PLUGIN_FREERADIO_SYNC_NOW" | string %]">
+	[% END %]
+
+[% PROCESS settings/footer.html %]
