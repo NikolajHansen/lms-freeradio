@@ -76,22 +76,19 @@ sub initPlugin {
 		[ 0, 0, 0, \&cliSync ]
 	);
 
-	# Subscribe to library rescan events to trigger directory sync
-	Slim::Control::Request::subscribe(\&_onLibraryRescan, [['library','rescan'], ['done']]);
+	# Register with scanner for import
+	Slim::Music::Import->addScanType('freeradio', {
+		cmd  => ['rescan', 'freeradio'],
+		name => 'PLUGIN_FREERADIO',
+	});
+
+	Slim::Music::Import->addImporter('Plugins::FreeRadio::Importer', { use => 1 });
 
 	# Trigger initial sync on startup
 	Slim::Utils::Timers::setTimer(undef, time() + 2, \&triggerSync);
 }
 
 sub getDisplayName { 'PLUGIN_FREERADIO' }
-
-sub _onLibraryRescan {
-	my $request = shift;
-	
-	# Trigger sync when library rescan completes
-	main::INFOLOG && $log->is_info && $log->info('Library rescan completed, syncing radio directory');
-	triggerSync();
-}
 
 sub triggerSync {
 	my $cb = shift;
@@ -324,11 +321,6 @@ sub _station_items {
 
 	push @items, { type => 'text', name => cstring($client, 'EMPTY') } unless @items;
 	return \@items;
-}
-
-sub shutdownPlugin {
-	# Unsubscribe from library rescan events
-	Slim::Control::Request::unsubscribe(\&_onLibraryRescan);
 }
 
 1;
