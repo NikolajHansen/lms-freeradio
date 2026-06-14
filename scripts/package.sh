@@ -2,7 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="0.1.0"
+
+# Extract version from install.xml
+VERSION=$(grep -oP '<version>\K[^<]+' "$ROOT/install.xml")
 OUT="$ROOT/lms-freeradio-${VERSION}.zip"
 
 cd "$ROOT"
