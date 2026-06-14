@@ -16,7 +16,10 @@ sub fetch_stations {
 	$apiKey =~ s/^\s+|\s+$//g;
 
 	if (!$apiKey) {
-		$eb->('Missing SHOUTcast API key. Set plugin.freeradio shoutcast_api_key in settings.');
+		# Skip SHOUTcast if no API key configured
+		# Icecast provider will handle station listings instead
+		main::INFOLOG && $self->{log}->is_info && $self->{log}->info('SHOUTcast API key not configured, skipping SHOUTcast provider');
+		$cb->([]);
 		return;
 	}
 
