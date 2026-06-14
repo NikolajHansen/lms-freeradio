@@ -18,12 +18,23 @@ jobs:
         run: |
           bash scripts/package.sh
           
-      - name: Get SHA1 digest
-        id: sha
+      - name: Calculate SHA1 and update extensions.xml
         run: |
           SHA1=$(sha1sum lms-freeradio-*.zip | awk '{print $1}')
-          echo "sha1=${SHA1}" >> $GITHUB_OUTPUT
           echo "SHA1 digest: ${SHA1}"
+          
+          # Extract version from tag
+          VERSION=${GITHUB_REF#refs/tags/v}
+          
+          # Update extensions.xml with new SHA1
+          sed -i "s/<sha>[^<]*<\/sha>/<sha>${SHA1}<\/sha>/" extensions.xml
+          
+          # Commit the updated extensions.xml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add extensions.xml
+          git commit -m "Update SHA1 digest for v${VERSION} release" || echo "No changes to commit"
+          git push origin master || echo "Push failed (no upstream)"
       
       - name: Create Release
         uses: softprops/action-gh-release@v1
