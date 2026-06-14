@@ -5,10 +5,8 @@
     <name>FreeRadio</name>
     <title>FreeRadio</title>
     <version>0.1.0</version>
-    <desc>Icecast + SHOUTcast radio directory for Lyrion Music Server</desc>
-    <changes>Initial release with Icecast and SHOUTcast providers</changes>
+    <desc>Icecast + SHOUTcast radio directory</desc>
     <creator>Nikolaj Hansen</creator>
-    <category>radio</category>
     <url>https://github.com/NikolajHansen/lms-freeradio/releases/download/v0.1.0/lms-freeradio-0.1.0.zip</url>
   </plugin>
 </extensions>
