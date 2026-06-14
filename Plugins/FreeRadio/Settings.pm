@@ -16,18 +16,13 @@ sub page {
 }
 
 sub prefs {
-	return ($prefs, qw(refresh_interval_mins shoutcast_api_key));
+	return ($prefs, qw(shoutcast_api_key));
 }
 
 sub handler {
 	my ($class, $client, $params, $callback, @args) = @_;
 
 	my $body = $class->SUPER::handler($client, $params, $callback, @args);
-
-	if ($params->{saveSettings}) {
-		require Plugins::FreeRadio::Plugin;
-		Plugins::FreeRadio::Plugin->scheduleRefresh();
-	}
 
 	if ($params->{syncNow}) {
 		require Plugins::FreeRadio::Plugin;

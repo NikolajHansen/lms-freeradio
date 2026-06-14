@@ -37,12 +37,6 @@ PLUGIN_FREERADIO_ENTER_SEARCH
 PLUGIN_FREERADIO_INDEXING_HINT
 	EN	Directory indexing is running. Results appear when provider sync completes.
 
-PLUGIN_FREERADIO_REFRESH_INTERVAL
-	EN	Refresh interval (minutes)
-
-PLUGIN_FREERADIO_REFRESH_INTERVAL_DESC
-	EN	How often station data should refresh from providers.
-
 PLUGIN_FREERADIO_SHOUTCAST_API_KEY
 	EN	SHOUTcast API key
 

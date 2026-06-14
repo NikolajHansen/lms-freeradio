@@ -46,7 +46,6 @@ sub initPlugin {
 	Slim::Utils::Strings::loadFile(catfile($pluginDir, 'strings.txt'));
 
 	$prefs->init({
-		refresh_interval_mins => 180,
 		shoutcast_api_key     => '',
 		initial_sync_done     => 0,
 	});
@@ -77,27 +76,21 @@ sub initPlugin {
 		[ 0, 0, 0, \&cliSync ]
 	);
 
+	# Subscribe to library rescan events to trigger directory sync
+	Slim::Control::Request::subscribe(\&_onLibraryRescan, [['library','rescan'], ['done']]);
+
+	# Trigger initial sync on startup
 	Slim::Utils::Timers::setTimer(undef, time() + 2, \&triggerSync);
-	$class->scheduleRefresh();
 }
 
 sub getDisplayName { 'PLUGIN_FREERADIO' }
 
-sub scheduleRefresh {
-	my $class = shift;
-
-	Slim::Utils::Timers::killTimers(undef, \&refreshTimer);
-	my $interval = $prefs->get('refresh_interval_mins') || 180;
-	$interval = 30 if $interval < 30;
-
-	Slim::Utils::Timers::setTimer(undef, time() + ($interval * 60), \&refreshTimer);
-
-	main::INFOLOG && $log->is_info && $log->info("scheduled refresh in ${interval}m");
-}
-
-sub refreshTimer {
+sub _onLibraryRescan {
+	my $request = shift;
+	
+	# Trigger sync when library rescan completes
+	main::INFOLOG && $log->is_info && $log->info('Library rescan completed, syncing radio directory');
 	triggerSync();
-	__PACKAGE__->scheduleRefresh();
 }
 
 sub triggerSync {
@@ -331,6 +324,11 @@ sub _station_items {
 
 	push @items, { type => 'text', name => cstring($client, 'EMPTY') } unless @items;
 	return \@items;
+}
+
+sub shutdownPlugin {
+	# Unsubscribe from library rescan events
+	Slim::Control::Request::unsubscribe(\&_onLibraryRescan);
 }
 
 1;
