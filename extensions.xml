@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <extensions>
   <plugins>
-    <plugin name="FreeRadio" version="0.1.0">
+    <plugin name="FreeRadio" version="0.1.1">
       <title lang="EN">FreeRadio</title>
       <desc lang="EN">Icecast + SHOUTcast radio directory for Lyrion Music Server</desc>
-      <changes lang="EN">Initial release with Icecast and SHOUTcast providers</changes>
+      <changes lang="EN">Hook into scanner.pl for library rescan integration</changes>
       <creator>Nikolaj Hansen</creator>
       <category>radio</category>
-      <url>https://github.com/NikolajHansen/lms-freeradio/releases/download/v0.1.0/lms-freeradio-0.1.0.zip</url>
-      <sha>1af520994a2031e14b945d0b49390621b3fb155c</sha>
+      <url>https://github.com/NikolajHansen/lms-freeradio/releases/download/v0.1.1/lms-freeradio-0.1.1.zip</url>
+      <sha>placeholder</sha>
     </plugin>
   </plugins>
 </extensions>
