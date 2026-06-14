@@ -8,6 +8,7 @@
       <creator>Nikolaj Hansen</creator>
       <category>radio</category>
       <url>https://github.com/NikolajHansen/lms-freeradio/releases/download/v0.1.0/lms-freeradio-0.1.0.zip</url>
+      <sha>44e65275802fc5c3798945466266863f097ee06b</sha>
     </plugin>
   </plugins>
 </extensions>
