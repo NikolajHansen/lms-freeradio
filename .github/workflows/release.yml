@@ -16,27 +16,38 @@ jobs:
         with:
           fetch-depth: 0
           
+      - name: Extract version and generate files from templates
+        run: |
+          # Extract version from tag (strip 'v' prefix)
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          
+          # Generate install.xml from template
+          sed "s/{{VERSION}}/${VERSION}/g" install.xml.template > install.xml
+          
+          # Generate temporary extensions.xml with placeholder SHA
+          sed "s/{{VERSION}}/${VERSION}/g; s/{{SHA1}}/PLACEHOLDER/g" extensions.xml.template > extensions.xml
+          
+          echo "Generated files for version ${VERSION}"
+          
       - name: Build plugin ZIP
         run: |
           bash scripts/package.sh
           
-      - name: Calculate SHA1 and update extensions.xml
+      - name: Calculate SHA1 and finalize extensions.xml
         run: |
           SHA1=$(sha1sum lms-freeradio-*.zip | awk '{print $1}')
           echo "SHA1 digest: ${SHA1}"
           
-          # Extract version from tag
-          VERSION=${GITHUB_REF#refs/tags/v}
+          # Generate final extensions.xml with actual SHA1
+          sed "s/{{VERSION}}/${VERSION}/g; s/{{SHA1}}/${SHA1}/g" extensions.xml.template > extensions.xml
           
-          # Update extensions.xml with new SHA1
-          sed -i "s/<sha>[^<]*<\/sha>/<sha>${SHA1}<\/sha>/" extensions.xml
-          
-          # Commit and push the updated extensions.xml to master
+          # Commit and push the updated files to master
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout master
           git add extensions.xml
-          git commit -m "Update SHA1 digest for v${VERSION} release" || echo "No changes to commit"
+          git commit -m "Update extensions.xml for v${VERSION} release" || echo "No changes to commit"
           git push origin master
       
       - name: Create Release
