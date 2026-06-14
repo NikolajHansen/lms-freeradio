@@ -7,6 +7,14 @@ OUT="$ROOT/lms-freeradio-${VERSION}.zip"
 
 cd "$ROOT"
 rm -f "$OUT"
-zip -rq "$OUT" install.xml Plugins README.md
+
+# Copy install.xml into Plugins/FreeRadio/ for correct ZIP structure
+cp install.xml Plugins/FreeRadio/install.xml
+
+# Create ZIP with Plugins at root (LMS will extract to InstalledPlugins/Plugins/)
+zip -rq "$OUT" Plugins/FreeRadio README.md
+
+# Clean up
+rm Plugins/FreeRadio/install.xml
 
 echo "Created: $OUT"
