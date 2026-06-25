@@ -8,6 +8,7 @@ use File::Spec::Functions qw(catfile);
 use Slim::Music::Import;
 use Slim::Utils::Progress;
 use Slim::Utils::Log;
+use Slim::Utils::Strings;
 
 my $log = Slim::Utils::Log->addLogCategory({
 	category     => 'plugin.freeradio',
@@ -56,9 +57,8 @@ sub startScan {
 		'name'  => 'plugin_freeradio_sync',
 		'total' => 1,
 		'bar'   => 1,
-		'every' => 1,
 	});
-	$progress->update('Preparing FreeRadio sync');
+	$progress->update(Slim::Utils::Strings::string('PLUGIN_FREERADIO'));
 
 	require Plugins::FreeRadio::Plugin;
 	if ($main::wipe) {
@@ -66,10 +66,15 @@ sub startScan {
 		Plugins::FreeRadio::Plugin::clear_library_data();
 	}
 
+	# Throttle per-station progress updates — update every N stations to avoid
+	# 33k+ DB writes while still showing a smoothly advancing bar.
+	my $PROGRESS_INTERVAL = 250;
+	my %provider_indexed;  # provider_id -> count
+
 	eval {
 		Plugins::FreeRadio::Plugin::triggerSync(
 			sub {
-				$progress->update('done');
+				$progress->update(Slim::Utils::Strings::string('PLUGIN_FREERADIO_PROGRESS_DONE'));
 				$progress->final();
 				main::INFOLOG && $log->is_info && $log->info('FreeRadio sync completed');
 				Slim::Music::Import->endImporter($class);
@@ -86,29 +91,55 @@ sub startScan {
 
 					if ($event->{event} eq 'provider_start') {
 						my $provider = $event->{provider} || 'provider';
-						$progress->update("Fetching $provider stations");
+						$provider_indexed{$provider} = 0;
+						$progress->update(
+							sprintf(Slim::Utils::Strings::string('PLUGIN_FREERADIO_PROGRESS_FETCHING'), $provider)
+						);
 						return;
 					}
 
 					if ($event->{event} eq 'provider_fetched') {
 						my $provider = $event->{provider} || 'provider';
-						my $count = $event->{filtered_count} || 0;
+						my $count    = $event->{filtered_count} || 0;
 						$progress->total($progress->total + $count);
+						$progress->update(
+							sprintf(Slim::Utils::Strings::string('PLUGIN_FREERADIO_PROGRESS_INDEXING'), $provider)
+						);
 						main::INFOLOG && $log->is_info && $log->info("Fetched $count stations from $provider");
 						return;
 					}
 
 					if ($event->{event} eq 'station_indexed') {
-						my $station = $event->{station} || {};
 						my $provider = $event->{provider} || '';
-						my $name = $station->{name} || $provider || 'station';
-						$progress->update($name);
+						$provider_indexed{$provider}++;
+						# Only update the progress display every PROGRESS_INTERVAL stations
+						# to avoid 33k+ DB writes that would slow down the scan.
+						if ($provider_indexed{$provider} % $PROGRESS_INTERVAL == 0) {
+							my $station = $event->{station} || {};
+							my $name    = $station->{name} || '';
+							$progress->update(
+								sprintf(Slim::Utils::Strings::string('PLUGIN_FREERADIO_PROGRESS_INDEXING'),
+									$name || $provider)
+							);
+						}
+						return;
+					}
+
+					if ($event->{event} eq 'provider_done') {
+						my $provider = $event->{provider} || 'provider';
+						my $count    = $provider_indexed{$provider} || $event->{count} || 0;
+						$progress->update(
+							sprintf(Slim::Utils::Strings::string('PLUGIN_FREERADIO_PROGRESS_PROVIDER_DONE'),
+								$count, $provider)
+						);
+						main::INFOLOG && $log->is_info && $log->info("Indexed $count stations from $provider");
 						return;
 					}
 
 					if ($event->{event} eq 'provider_error') {
 						my $provider = $event->{provider} || 'provider';
-						$progress->update("Failed $provider");
+						$log->warn("Provider $provider failed: " . ($event->{error} || ''));
+						$progress->update("$provider failed");
 						return;
 					}
 				},
