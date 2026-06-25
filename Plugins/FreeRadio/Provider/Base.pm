@@ -85,7 +85,14 @@ sub _fetch_xml {
 		sub {
 			my $content = shift;
 			my $decoded = eval {
-				XMLin($content, KeyAttr => [], ForceArray => [qw(entry station)]);
+				# ContentKey => 'content': when an element has both attributes and
+				# text, the text lands in {content}. Also used to unwrap empty
+				# elements — XML::Simple returns {} for <foo></foo> rather than ''.
+				XMLin($content,
+					KeyAttr    => [],
+					ForceArray => [qw(entry station)],
+					ContentKey => 'content',
+				);
 			};
 			if ($@) {
 				$eb->("invalid xml from $url: $@");

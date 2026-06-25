@@ -35,7 +35,8 @@ sub normalize_station {
 
 	my $name = _trim($raw->{name});
 	my $stream_url = _trim($raw->{stream_url} || $raw->{url});
-	return unless $name && $stream_url;
+	# Safety net: reject if URL is a stringified ref or not an http(s) URL
+	return unless $name && $stream_url && $stream_url =~ m{^https?://}i;
 
 	my $source_id = _trim($raw->{source_id});
 	my $country   = _trim($raw->{country}) || _country_from_url($stream_url);
