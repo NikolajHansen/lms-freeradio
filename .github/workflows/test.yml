@@ -1,0 +1,23 @@
+name: Tests
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Perl dependencies
+        run: sudo apt-get install -y libdbi-perl libdbd-sqlite3-perl
+
+      - name: Run tests
+        run: |
+          perl -I t/lib -I Plugins t/01_index.t
+          perl -I t/lib -I Plugins t/02_store.t
+          perl -I t/lib -I Plugins t/03_pipeline.t
