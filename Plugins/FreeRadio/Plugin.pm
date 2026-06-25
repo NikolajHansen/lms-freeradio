@@ -12,6 +12,7 @@ use Slim::Menu::TrackInfo;
 use Slim::Utils::Prefs;
 use Slim::Utils::Strings qw(cstring string);
 use Slim::Utils::Timers;
+use Slim::Control::XMLBrowser;
 
 use Plugins::FreeRadio::Cache;
 use Plugins::FreeRadio::Index;
@@ -99,6 +100,12 @@ sub initPlugin {
 	Slim::Control::Request::addDispatch(
 		[ 'freeradio', 'sync' ],
 		[ 0, 0, 0, \&cliSync ]
+	);
+
+	# Context menu (right-arrow / more) for a single station: Add/Remove Favorite.
+	Slim::Control::Request::addDispatch(
+		[ 'freeradio', 'stationcontext' ],
+		[ 1, 1, 1, \&stationContextCLI ]
 	);
 }
 
@@ -342,7 +349,7 @@ sub searchHandler {
 
 	$store->record_search($query);
 	my $rows = $search->search({ query => $query, limit => 200, offset => 0 });
-	$cb->({ items => _station_items($client, $rows, 0) });
+	$cb->({ items => _station_items($client, $rows) });
 }
 
 sub browseFieldValues {
@@ -449,13 +456,13 @@ sub browseFieldStations {
 		$rows = $search->search({ filters => \%filters, limit => 500, offset => 0 });
 	}
 
-	$cb->({ items => _station_items($client, $rows, 0) });
+	$cb->({ items => _station_items($client, $rows) });
 }
 
 sub favoritesHandler {
 	my ($client, $cb) = @_;
 	my $rows = $store->list_favorites();
-	$cb->({ items => _station_items($client, $rows, 1) });
+	$cb->({ items => _station_items($client, $rows) });
 }
 
 sub addFavoriteHandler {
@@ -474,6 +481,37 @@ sub removeFavoriteHandler {
 		$store->remove_favorite($uid);
 	}
 	$cb->({ items => [ { type => 'text', name => cstring($client, 'PLUGIN_FREERADIO_FAVORITE_REMOVED') } ] });
+}
+
+sub stationContextCLI {
+	my $request = shift;
+	my $uid     = $request->getParam('uid');
+	Slim::Control::XMLBrowser::cliQuery('freeradio', sub {
+		my ($client, $cb) = @_;
+		_stationContextItems($client, $cb, $uid);
+	}, $request);
+}
+
+sub _stationContextItems {
+	my ($client, $cb, $uid) = @_;
+	my @items;
+	if ($store->is_favorite($uid)) {
+		push @items, {
+			type        => 'link',
+			name        => cstring($client, 'PLUGIN_FREERADIO_REMOVE_FAVORITE'),
+			url         => \&removeFavoriteHandler,
+			passthrough => [ { uid => $uid } ],
+		};
+	}
+	else {
+		push @items, {
+			type        => 'link',
+			name        => cstring($client, 'PLUGIN_FREERADIO_ADD_FAVORITE'),
+			url         => \&addFavoriteHandler,
+			passthrough => [ { uid => $uid } ],
+		};
+	}
+	$cb->({ items => \@items, isContextMenu => 1 });
 }
 
 sub trackInfoHandler {
@@ -577,57 +615,38 @@ sub _apply_station_filters {
 }
 
 sub _station_items {
-	my ($client, $rows, $favorite_context) = @_;
+	my ($client, $rows) = @_;
 	my @items;
 
 	for my $row (@{$rows || []}) {
 		my $line2 = join(' · ', grep { $_ } ($row->{country}, $row->{genre}, uc($row->{source} || '')));
-		my $description = $row->{description} || $line2;
-
-		my @subItems = ({
-			type    => 'audio',
-			name    => cstring($client, 'PLAY'),
-			line1   => $row->{name},
-			line2   => $description,
-			url     => $row->{stream_url},
-			bitrate => $row->{bitrate} || 0,
-		});
-
-		if (!$favorite_context) {
-			push @subItems, {
-				type => 'link',
-				name => cstring($client, 'PLUGIN_FREERADIO_ADD_FAVORITE'),
-				url  => \&addFavoriteHandler,
-				passthrough => [ { uid => $row->{uid} } ],
-			};
-		}
-		else {
-			push @subItems, {
-				type => 'link',
-				name => cstring($client, 'PLUGIN_FREERADIO_REMOVE_FAVORITE'),
-				url  => \&removeFavoriteHandler,
-				passthrough => [ { uid => $row->{uid} } ],
-			};
-		}
 
 		push @items, {
-			type  => 'link',
-			name  => $row->{name},
-			line1 => $row->{name},
-			line2 => $line2,
-			url   => sub {
-				my ($c, $innerCb) = @_;
-				$innerCb->({ items => \@subItems });
-			},
-			jive => {
-				actions => {
-					play => {
-						command     => [ 'playlist', 'play' ],
-						fixedParams => {
-							url => $row->{stream_url},
-						},
-						nextWindow => 'nowPlaying',
-					},
+			type    => 'audio',
+			name    => $row->{name},
+			line1   => $row->{name},
+			line2   => $line2,
+			url     => $row->{stream_url},
+			bitrate => $row->{bitrate} || 0,
+			# play/add/insert actions so Jive players have explicit controls
+			itemActions => {
+				play => {
+					command     => [ 'playlist', 'play' ],
+					fixedParams => { url => $row->{stream_url} },
+					nextWindow  => 'nowPlaying',
+				},
+				add => {
+					command     => [ 'playlist', 'add' ],
+					fixedParams => { url => $row->{stream_url} },
+				},
+				insert => {
+					command     => [ 'playlist', 'insert' ],
+					fixedParams => { url => $row->{stream_url} },
+				},
+				# info maps to actions.more (right-arrow context menu)
+				info => {
+					command     => [ 'freeradio', 'stationcontext' ],
+					fixedParams => { uid => $row->{uid} },
 				},
 			},
 		};
