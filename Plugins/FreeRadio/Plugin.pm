@@ -346,7 +346,7 @@ sub browseFieldValues {
 				url  => \&browseFieldStations,
 				passthrough => [ { field => $field, value => $_->{genre_label}, genre_key => $_->{genre_key} } ],
 			}
-		} @$genres;
+		} sort { lc($a->{genre_label}) cmp lc($b->{genre_label}) } @$genres;
 	}
 	elsif ($field eq 'station_name') {
 		my $station_names = $search->indexed_station_names();
@@ -357,7 +357,7 @@ sub browseFieldValues {
 				url  => \&browseFieldStations,
 				passthrough => [ { field => $field, value => $_->{station_name_label}, station_name_key => $_->{station_name_key} } ],
 			}
-		} @$station_names;
+		} sort { lc($a->{station_name_label}) cmp lc($b->{station_name_label}) } @$station_names;
 	}
 	elsif ($field eq 'bitrate_quality') {
 		my $quality = $search->indexed_bitrate_quality();
@@ -368,7 +368,7 @@ sub browseFieldValues {
 				url  => \&browseFieldStations,
 				passthrough => [ { field => $field, value => $_->{quality_label}, quality_key => $_->{quality_key} } ],
 			}
-		} @$quality;
+		} @$quality;  # bitrate quality uses intentional quality-level order
 	}
 	elsif ($field eq 'codec') {
 		my $codecs = $search->indexed_codecs();
@@ -379,7 +379,7 @@ sub browseFieldValues {
 				url  => \&browseFieldStations,
 				passthrough => [ { field => $field, value => $_->{codec_label}, codec_key => $_->{codec_key} } ],
 			}
-		} @$codecs;
+		} sort { lc($a->{codec_label}) cmp lc($b->{codec_label}) } @$codecs;
 	}
 	else {
 		my $values = $search->distinct_values($field);
@@ -390,7 +390,7 @@ sub browseFieldValues {
 				url  => \&browseFieldStations,
 				passthrough => [ { field => $field, value => $_ } ],
 			}
-		} @$values;
+		} sort { lc($a) cmp lc($b) } @$values;
 	}
 
 	push @items, { type => 'text', name => cstring($client, 'EMPTY') } unless @items;
