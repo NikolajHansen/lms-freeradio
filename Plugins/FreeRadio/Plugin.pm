@@ -12,7 +12,6 @@ use Slim::Menu::TrackInfo;
 use Slim::Utils::Prefs;
 use Slim::Utils::Strings qw(cstring string);
 use Slim::Utils::Timers;
-use Slim::Control::XMLBrowser;
 
 use Plugins::FreeRadio::Cache;
 use Plugins::FreeRadio::Index;
@@ -485,30 +484,46 @@ sub removeFavoriteHandler {
 
 sub stationContextCLI {
 	my $request = shift;
+	my $client  = $request->client();
 	my $uid     = $request->getParam('uid');
-	Slim::Control::XMLBrowser::cliQuery('freeradio', sub {
-		my ($client, $cb) = @_;
-		_stationContextItems($client, $cb, $uid);
-	}, $request);
+
+	_init_runtime() unless $store;
+	$request->setStatusProcessing();
+
+	_stationContextItems($client, sub {
+		my $feed = shift;
+		$feed->{'type'} ||= 'opml';
+		$request->setRawResults($feed);
+		$request->setStatusDone();
+	}, $uid);
 }
 
 sub _stationContextItems {
 	my ($client, $cb, $uid) = @_;
+
+	_init_runtime() unless $store;
+
 	my @items;
-	if ($store->is_favorite($uid)) {
+	if ($store && $store->is_favorite($uid)) {
 		push @items, {
-			type        => 'link',
-			name        => cstring($client, 'PLUGIN_FREERADIO_REMOVE_FAVORITE'),
-			url         => \&removeFavoriteHandler,
-			passthrough => [ { uid => $uid } ],
+			type => 'link',
+			name => cstring($client, 'PLUGIN_FREERADIO_REMOVE_FAVORITE'),
+			url  => sub {
+				my ($client2, $cb2) = @_;
+				$store->remove_favorite($uid);
+				$cb2->({ items => [{ type => 'text', name => cstring($client2, 'PLUGIN_FREERADIO_FAVORITE_REMOVED') }] });
+			},
 		};
 	}
 	else {
 		push @items, {
-			type        => 'link',
-			name        => cstring($client, 'PLUGIN_FREERADIO_ADD_FAVORITE'),
-			url         => \&addFavoriteHandler,
-			passthrough => [ { uid => $uid } ],
+			type => 'link',
+			name => cstring($client, 'PLUGIN_FREERADIO_ADD_FAVORITE'),
+			url  => sub {
+				my ($client2, $cb2) = @_;
+				$store->add_favorite($uid);
+				$cb2->({ items => [{ type => 'text', name => cstring($client2, 'PLUGIN_FREERADIO_FAVORITE_ADDED') }] });
+			},
 		};
 	}
 	$cb->({ items => \@items, isContextMenu => 1 });
