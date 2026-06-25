@@ -8,7 +8,7 @@ SELECTOR="app=lyrion"
 POD=""
 CONTAINER="lyrion"
 TARGET_DIR="/config/cache/InstalledPlugins/Plugins/FreeRadio"
-RESTART=0
+RESTART=1
 
 usage() {
 	cat <<'EOF'
@@ -24,7 +24,8 @@ Options:
   -c, --container <name>   Container name for kubectl cp/exec (default: lyrion)
   -t, --target <path>      Plugin target dir in container
                            (default: /config/cache/InstalledPlugins/Plugins/FreeRadio)
-  -r, --restart            Restart pod after deploy (delete selected pod)
+  -r, --restart            Restart pod after deploy — default: ON
+  --no-restart             Skip pod restart (files copied but server not reloaded)
   -h, --help               Show this help
 
 Examples:
@@ -48,6 +49,8 @@ while (($#)); do
 			TARGET_DIR="$2"; shift 2 ;;
 		-r|--restart)
 			RESTART=1; shift ;;
+		--no-restart)
+			RESTART=0; shift ;;
 		-h|--help)
 			usage; exit 0 ;;
 		*)
@@ -106,7 +109,10 @@ echo "Local ZIP artifact: $ZIP_PATH"
 if [[ "$RESTART" -eq 1 ]]; then
 	echo "Restarting pod $POD..."
 	kubectl -n "$NAMESPACE" delete pod "$POD" --wait=false >/dev/null
-	echo "Pod deleted; controller will recreate it."
+	echo "Pod deleted; waiting for replacement to be ready..."
+	kubectl -n "$NAMESPACE" wait pod -l "$SELECTOR" --for=condition=Ready --timeout=120s 2>/dev/null \
+		&& echo "Pod is ready." \
+		|| echo "Timed out waiting — check: kubectl -n $NAMESPACE get pods"
 fi
 
 echo "Done."
