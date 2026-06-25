@@ -97,9 +97,6 @@ PLUGIN_FREERADIO_GENRES_TITLE
 PLUGIN_FREERADIO_GENRES_DESC
 	EN	One genre per line: Label: keyword1, keyword2, ... Stations are matched by substring against keywords (case-insensitive). Resync after saving.
 
-PLUGIN_FREERADIO_GENRES_SAVE
-	EN	Save Genres
-
 
 
 

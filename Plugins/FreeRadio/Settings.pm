@@ -36,8 +36,8 @@ sub handler {
 	require Plugins::FreeRadio::Plugin;
 	my $store = Plugins::FreeRadio::Plugin::get_store();
 
-	if ($params->{saveGenres} && $store) {
-		my $text = $params->{genres_text} // '';
+	if ($store && defined $params->{genres_text}) {
+		my $text = $params->{genres_text};
 		$prefs->set('canonical_genres_text', $text);
 		$store->sync_canonical_genres($text);
 	}
@@ -50,13 +50,7 @@ sub handler {
 		$params->{genres_text} = Plugins::FreeRadio::Store::DEFAULT_GENRES_TEXT;
 	}
 
-	my $body = $class->SUPER::handler($client, $params, $callback, @args);
-
-	if ($params->{syncNow}) {
-		Plugins::FreeRadio::Plugin::requestScannerSync();
-	}
-
-	return $body;
+	return $class->SUPER::handler($client, $params, $callback, @args);
 }
 
 1;
