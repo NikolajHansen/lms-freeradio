@@ -29,6 +29,20 @@ FreeRadio is a Lyrion Music Server (LMS) plugin that provides a free internet ra
 5. Configure SHOUTcast API key in:
    `Settings → Plugins → FreeRadio`
 
+## Development deploy to Kubernetes
+
+For fast iteration against the running Lyrion pod:
+
+```bash
+./scripts/dev-deploy-k8s.sh --restart
+```
+
+What it does:
+- Builds `lms-freeradio-<version>.zip` using `scripts/package.sh`
+- Copies `Plugins/FreeRadio` into the running pod at
+  `/config/cache/InstalledPlugins/Plugins/FreeRadio`
+- Optionally restarts the pod so LMS reloads plugin code (`--restart`)
+
 ## Repository URL flow
 
 - `extensions.xml` is included in this repository as a template.

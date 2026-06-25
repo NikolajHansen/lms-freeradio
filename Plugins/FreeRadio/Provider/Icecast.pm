@@ -41,7 +41,9 @@ sub fetch_stations {
 				};
 			}
 
-			$cb->(\@stations);
+			$cb->(\@stations, {
+				total_available => scalar(@stations),
+			});
 		},
 		$eb,
 	);

@@ -3,6 +3,7 @@ package Plugins::FreeRadio::Provider::Base;
 use strict;
 
 use JSON::PP qw(decode_json);
+use HTTP::Tiny;
 use XML::Simple;
 
 use Slim::Networking::SimpleAsyncHTTP;
@@ -30,6 +31,22 @@ sub fetch_stations {
 sub _fetch_text {
 	my ($self, $url, $cb, $eb) = @_;
 	$eb ||= sub {};
+
+	# scanner.pl does not run the async server event loop - use blocking HTTP there.
+	if (main::SCANNER) {
+		my $http = HTTP::Tiny->new(
+			timeout => 30,
+		);
+		my $res = $http->get($url);
+		if ($res->{success}) {
+			$cb->($res->{content});
+		}
+		else {
+			my $err = $res->{status} ? "$res->{status} $res->{reason}" : 'http request failed';
+			$eb->($err);
+		}
+		return;
+	}
 
 	Slim::Networking::SimpleAsyncHTTP->new(
 		sub {

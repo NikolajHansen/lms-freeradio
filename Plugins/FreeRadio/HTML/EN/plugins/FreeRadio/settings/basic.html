@@ -1,7 +1,43 @@
 [% PROCESS settings/header.html %]
 
+	[% WRAPPER setting title="PLUGIN_FREERADIO_SOURCES" desc="PLUGIN_FREERADIO_SOURCES_DESC" %]
+		<label>
+			<input type="checkbox" name="pref_enable_icecast" value="1" [% IF prefs.pref_enable_icecast %]checked[% END %]>
+			[% "PLUGIN_FREERADIO_SOURCE_ICECAST" | string %]
+		</label>
+		<br/>
+		<label>
+			<input type="checkbox" name="pref_enable_shoutcast" value="1" [% IF prefs.pref_enable_shoutcast %]checked[% END %]>
+			[% "PLUGIN_FREERADIO_SOURCE_SHOUTCAST" | string %]
+		</label>
+	[% END %]
+
 	[% WRAPPER setting title="PLUGIN_FREERADIO_SHOUTCAST_API_KEY" desc="PLUGIN_FREERADIO_SHOUTCAST_API_KEY_DESC" %]
 		<input type="text" class="stdedit" name="pref_shoutcast_api_key" value="[% prefs.pref_shoutcast_api_key | html %]">
+	[% END %]
+
+	[% WRAPPER setting title="PLUGIN_FREERADIO_FILTERS_GENRE" desc="PLUGIN_FREERADIO_FILTERS_GENRE_DESC" %]
+		<div>
+			<div>[% "PLUGIN_FREERADIO_FILTER_INCLUDE" | string %]</div>
+			<textarea class="stdedit" name="pref_include_genres" cols="60" rows="3">[% prefs.pref_include_genres | html %]</textarea>
+		</div>
+		<br/>
+		<div>
+			<div>[% "PLUGIN_FREERADIO_FILTER_EXCLUDE" | string %]</div>
+			<textarea class="stdedit" name="pref_exclude_genres" cols="60" rows="3">[% prefs.pref_exclude_genres | html %]</textarea>
+		</div>
+	[% END %]
+
+	[% WRAPPER setting title="PLUGIN_FREERADIO_FILTERS_COUNTRY" desc="PLUGIN_FREERADIO_FILTERS_COUNTRY_DESC" %]
+		<div>
+			<div>[% "PLUGIN_FREERADIO_FILTER_INCLUDE" | string %]</div>
+			<textarea class="stdedit" name="pref_include_countries" cols="60" rows="3">[% prefs.pref_include_countries | html %]</textarea>
+		</div>
+		<br/>
+		<div>
+			<div>[% "PLUGIN_FREERADIO_FILTER_EXCLUDE" | string %]</div>
+			<textarea class="stdedit" name="pref_exclude_countries" cols="60" rows="3">[% prefs.pref_exclude_countries | html %]</textarea>
+		</div>
 	[% END %]
 
 	[% WRAPPER settingSection %]

@@ -8,6 +8,7 @@ use File::Spec::Functions qw(catfile catdir);
 use Scalar::Util qw(blessed);
 
 use Slim::Utils::Log;
+use Slim::Menu::TrackInfo;
 use Slim::Utils::Prefs;
 use Slim::Utils::Strings qw(cstring string);
 use Slim::Utils::Timers;
@@ -40,25 +41,43 @@ my $index;
 my @providers;
 my $syncRunning = 0;
 
+sub _init_runtime {
+	$prefs->init({
+		shoutcast_api_key => '',
+		initial_sync_done => 0,
+		enable_icecast    => 1,
+		enable_shoutcast  => 1,
+		include_genres    => '',
+		exclude_genres    => '',
+		include_countries => '',
+		exclude_countries => '',
+	});
+
+	$store ||= Plugins::FreeRadio::Store->new(log => $log);
+	$cache ||= Plugins::FreeRadio::Cache->new(size => 300, default_ttl => 300);
+	$index ||= Plugins::FreeRadio::Index->new(store => $store, log => $log);
+	$search ||= Plugins::FreeRadio::Search->new(store => $store, cache => $cache, log => $log);
+
+	if (!@providers) {
+		@providers = (
+			Plugins::FreeRadio::Provider::Icecast->new(log => $log),
+			Plugins::FreeRadio::Provider::Shoutcast->new(log => $log, prefs => $prefs),
+		);
+	}
+}
+
 sub initPlugin {
 	my ($class) = @_;
 
 	Slim::Utils::Strings::loadFile(catfile($pluginDir, 'strings.txt'));
 
-	$prefs->init({
-		shoutcast_api_key     => '',
-		initial_sync_done     => 0,
-	});
+	require Plugins::FreeRadio::Importer;
+	Plugins::FreeRadio::Importer->initPlugin();
 
-	$store = Plugins::FreeRadio::Store->new(log => $log);
-	$cache = Plugins::FreeRadio::Cache->new(size => 300, default_ttl => 300);
-	$index = Plugins::FreeRadio::Index->new(store => $store, log => $log);
-	$search = Plugins::FreeRadio::Search->new(store => $store, cache => $cache, log => $log);
+	# Scanner process only needs importer registration.
+	return if main::SCANNER;
 
-	@providers = (
-		Plugins::FreeRadio::Provider::Icecast->new(log => $log),
-		Plugins::FreeRadio::Provider::Shoutcast->new(log => $log, prefs => $prefs),
-	);
+	_init_runtime();
 
 	if (main::WEBUI) {
 		require Plugins::FreeRadio::Settings;
@@ -69,28 +88,52 @@ sub initPlugin {
 		feed => \&handleFeed,
 		tag  => 'freeradio',
 		menu => 'radios',
+		weight => 2,
 	);
+
+	Slim::Menu::TrackInfo->registerInfoProvider( freeradio => (
+		after => 'playitem',
+		func  => \&trackInfoHandler,
+	) );
 
 	Slim::Control::Request::addDispatch(
 		[ 'freeradio', 'sync' ],
 		[ 0, 0, 0, \&cliSync ]
 	);
-
-	# Register with scanner for import
-	Slim::Music::Import->addScanType('freeradio', {
-		cmd  => ['rescan', 'freeradio'],
-		name => 'PLUGIN_FREERADIO',
-	});
-
-	# Trigger initial sync on startup
-	Slim::Utils::Timers::setTimer(undef, time() + 2, \&triggerSync);
 }
 
 sub getDisplayName { 'PLUGIN_FREERADIO' }
 
-sub triggerSync {
-	my $cb = shift;
+sub playerMenu { 'RADIO' }
+
+sub requestScannerSync {
+	my ($cb) = @_;
 	$cb ||= sub {};
+
+	# In scanner.pl context, run directly.
+	if (main::SCANNER) {
+		triggerSync($cb);
+		return;
+	}
+
+	# In server context, only queue scanner work.
+	Slim::Control::Request::executeRequest(undef, [ 'rescan', 'external', 'file:///freeradio' ]);
+	$cb->();
+}
+
+sub triggerSync {
+	my ($cb, $opts) = @_;
+	$cb ||= sub {};
+	$opts ||= {};
+	my $on_progress = $opts->{on_progress} || sub {};
+
+	# Never run fetch/index pipeline in server process.
+	if (!main::SCANNER) {
+		requestScannerSync($cb);
+		return;
+	}
+
+	_init_runtime();
 
 	if ($syncRunning) {
 		main::DEBUGLOG && $log->is_debug && $log->debug('sync already running');
@@ -99,7 +142,11 @@ sub triggerSync {
 	}
 
 	$syncRunning = 1;
-	my @queue = @providers;
+	my @queue = grep { _provider_enabled($_->provider_id) } @providers;
+	$on_progress->({
+		event => 'start',
+		providers_total => scalar @queue,
+	});
 
 	my $finish = sub {
 		$syncRunning = 0;
@@ -118,25 +165,60 @@ sub triggerSync {
 
 		my $pid = $provider->provider_id;
 		main::INFOLOG && $log->is_info && $log->info("syncing provider $pid");
+		$on_progress->({
+			event    => 'provider_start',
+			provider => $pid,
+		});
 
 		$provider->fetch_stations(
 			sub {
-				my $stations = shift || [];
+				my ($stations, $meta) = @_;
+				$stations ||= [];
+				$meta ||= {};
+				my $raw_count = scalar @$stations;
+				$stations = _apply_station_filters($stations);
+				my $filtered_count = scalar @$stations;
+				$on_progress->({
+					event           => 'provider_fetched',
+					provider        => $pid,
+					raw_count       => $raw_count,
+					filtered_count  => $filtered_count,
+					total_available => $meta->{total_available},
+				});
+
 				eval {
-					$index->index_provider($pid, $stations);
+					$index->index_provider($pid, $stations, sub {
+						my ($station) = @_;
+						$on_progress->({
+							event   => 'station_indexed',
+							provider => $pid,
+							station => $station,
+						});
+					});
 					$store->set_sync_state("provider.$pid.last_success", time());
-					$store->set_sync_state("provider.$pid.last_count", scalar @$stations);
+					$store->set_sync_state("provider.$pid.last_count", $filtered_count);
+					$store->set_sync_state("provider.$pid.last_total_available", $meta->{total_available} || $filtered_count);
 					1;
 				} or do {
 					my $err = $@ || 'unknown indexing error';
 					$log->error("failed indexing $pid: $err");
 				};
+				$on_progress->({
+					event   => 'provider_done',
+					provider => $pid,
+					count   => $filtered_count,
+				});
 				$next->();
 			},
 			sub {
 				my $err = shift || 'unknown provider error';
 				$log->warn("provider $pid failed: $err");
 				$store->set_sync_state("provider.$pid.last_error", $err);
+				$on_progress->({
+					event   => 'provider_error',
+					provider => $pid,
+					error   => $err,
+				});
 				$next->();
 			}
 		);
@@ -145,9 +227,16 @@ sub triggerSync {
 	$next->();
 }
 
+sub clear_library_data {
+	_init_runtime();
+	$store->clear_stations();
+	$store->clear_sync_state();
+	$search->clear_cache();
+}
+
 sub cliSync {
 	my $request = shift;
-	triggerSync(sub { $request->setStatusDone() });
+	requestScannerSync(sub { $request->setStatusDone() });
 }
 
 sub handleFeed {
@@ -173,6 +262,7 @@ sub _root_menu {
 		type => 'search',
 		url  => \&searchHandler,
 		image => 'html/images/search.png',
+		weight => 10,
 	};
 
 	push @items, {
@@ -180,6 +270,8 @@ sub _root_menu {
 		type => 'link',
 		url  => \&browseFieldValues,
 		passthrough => [ { field => 'genre' } ],
+		image => '/plugins/TuneIn/html/images/radiomusic.png',
+		weight => 20,
 	};
 
 	push @items, {
@@ -187,6 +279,8 @@ sub _root_menu {
 		type => 'link',
 		url  => \&browseFieldValues,
 		passthrough => [ { field => 'country' } ],
+		image => '/plugins/TuneIn/html/images/radioworld.png',
+		weight => 30,
 	};
 
 	push @items, {
@@ -194,12 +288,43 @@ sub _root_menu {
 		type => 'link',
 		url  => \&browseFieldValues,
 		passthrough => [ { field => 'source' } ],
+		image => '/plugins/TuneIn/html/images/radio.png',
+		weight => 40,
+	};
+
+	push @items, {
+		name => cstring($client, 'PLUGIN_FREERADIO_BROWSE_STATION_NAME'),
+		type => 'link',
+		url  => \&browseFieldValues,
+		passthrough => [ { field => 'station_name' } ],
+		image => '/plugins/TuneIn/html/images/radio.png',
+		weight => 45,
+	};
+
+	push @items, {
+		name => cstring($client, 'PLUGIN_FREERADIO_BROWSE_BITRATE_QUALITY'),
+		type => 'link',
+		url  => \&browseFieldValues,
+		passthrough => [ { field => 'bitrate_quality' } ],
+		image => '/plugins/TuneIn/html/images/radiomusic.png',
+		weight => 47,
+	};
+
+	push @items, {
+		name => cstring($client, 'PLUGIN_FREERADIO_BROWSE_FORMAT'),
+		type => 'link',
+		url  => \&browseFieldValues,
+		passthrough => [ { field => 'codec' } ],
+		image => '/plugins/TuneIn/html/images/radiomusic.png',
+		weight => 48,
 	};
 
 	push @items, {
 		name => cstring($client, 'PLUGIN_FREERADIO_FAVORITES'),
 		type => 'link',
 		url  => \&favoritesHandler,
+		image => '/plugins/TuneIn/html/images/radiopresets.png',
+		weight => 50,
 	};
 
 	return \@items;
@@ -223,16 +348,63 @@ sub searchHandler {
 sub browseFieldValues {
 	my ($client, $cb, $args, $pt) = @_;
 	my $field = $pt->{field} || 'genre';
-	my $values = $search->distinct_values($field);
+	my @items;
 
-	my @items = map {
-		{
-			name => $_,
-			type => 'link',
-			url  => \&browseFieldStations,
-			passthrough => [ { field => $field, value => $_ } ],
-		}
-	} @$values;
+	if ($field eq 'genre') {
+		my $genres = $search->indexed_genres();
+		@items = map {
+			{
+				name => "$_->{genre_label} ($_->{station_count})",
+				type => 'link',
+				url  => \&browseFieldStations,
+				passthrough => [ { field => $field, value => $_->{genre_label}, genre_key => $_->{genre_key} } ],
+			}
+		} @$genres;
+	}
+	elsif ($field eq 'station_name') {
+		my $station_names = $search->indexed_station_names();
+		@items = map {
+			{
+				name => "$_->{station_name_label} ($_->{station_count})",
+				type => 'link',
+				url  => \&browseFieldStations,
+				passthrough => [ { field => $field, value => $_->{station_name_label}, station_name_key => $_->{station_name_key} } ],
+			}
+		} @$station_names;
+	}
+	elsif ($field eq 'bitrate_quality') {
+		my $quality = $search->indexed_bitrate_quality();
+		@items = map {
+			{
+				name => "$_->{quality_label} ($_->{station_count})",
+				type => 'link',
+				url  => \&browseFieldStations,
+				passthrough => [ { field => $field, value => $_->{quality_label}, quality_key => $_->{quality_key} } ],
+			}
+		} @$quality;
+	}
+	elsif ($field eq 'codec') {
+		my $codecs = $search->indexed_codecs();
+		@items = map {
+			{
+				name => "$_->{codec_label} ($_->{station_count})",
+				type => 'link',
+				url  => \&browseFieldStations,
+				passthrough => [ { field => $field, value => $_->{codec_label}, codec_key => $_->{codec_key} } ],
+			}
+		} @$codecs;
+	}
+	else {
+		my $values = $search->distinct_values($field);
+		@items = map {
+			{
+				name => $_,
+				type => 'link',
+				url  => \&browseFieldStations,
+				passthrough => [ { field => $field, value => $_ } ],
+			}
+		} @$values;
+	}
 
 	push @items, { type => 'text', name => cstring($client, 'EMPTY') } unless @items;
 	$cb->({ items => \@items });
@@ -242,8 +414,41 @@ sub browseFieldStations {
 	my ($client, $cb, $args, $pt) = @_;
 	my $field = $pt->{field};
 	my $value = $pt->{value};
-	my %filters = ( $field => $value );
-	my $rows = $search->search({ filters => \%filters, limit => 500, offset => 0 });
+	my $rows;
+
+	if ($field eq 'genre' && defined $pt->{genre_key} && length $pt->{genre_key}) {
+		$rows = $search->search_by_genre_key(
+			genre_key => $pt->{genre_key},
+			limit     => 500,
+			offset    => 0,
+		);
+	}
+	elsif ($field eq 'station_name' && defined $pt->{station_name_key} && length $pt->{station_name_key}) {
+		$rows = $search->search_by_station_name_key(
+			station_name_key => $pt->{station_name_key},
+			limit            => 500,
+			offset           => 0,
+		);
+	}
+	elsif ($field eq 'bitrate_quality' && defined $pt->{quality_key} && length $pt->{quality_key}) {
+		$rows = $search->search_by_quality_key(
+			quality_key => $pt->{quality_key},
+			limit       => 500,
+			offset      => 0,
+		);
+	}
+	elsif ($field eq 'codec' && defined $pt->{codec_key} && length $pt->{codec_key}) {
+		$rows = $search->search_by_codec_key(
+			codec_key => $pt->{codec_key},
+			limit     => 500,
+			offset    => 0,
+		);
+	}
+	else {
+		my %filters = ( $field => $value );
+		$rows = $search->search({ filters => \%filters, limit => 500, offset => 0 });
+	}
+
 	$cb->({ items => _station_items($client, $rows, 0) });
 }
 
@@ -269,6 +474,106 @@ sub removeFavoriteHandler {
 		$store->remove_favorite($uid);
 	}
 	$cb->({ items => [ { type => 'text', name => cstring($client, 'PLUGIN_FREERADIO_FAVORITE_REMOVED') } ] });
+}
+
+sub trackInfoHandler {
+	my ($client, $url, $track) = @_;
+
+	return unless $url;
+	my $station = $store->get_station_by_stream_url($url);
+	return unless $station;
+
+	return {
+		name => cstring($client, 'PLUGIN_FREERADIO_TRACKINFO_OPTIONS'),
+		url  => \&trackInfoMenu,
+		passthrough => [ { uid => $station->{uid} } ],
+	};
+}
+
+sub trackInfoMenu {
+	my ($client, $cb, $args, $pt) = @_;
+	my $uid = $pt->{uid};
+	my $station = $store->get_station_by_uid($uid);
+
+	if (!$station) {
+		$cb->({ items => [ { type => 'text', name => cstring($client, 'EMPTY') } ] });
+		return;
+	}
+
+	my @items = ({
+		type    => 'audio',
+		name    => cstring($client, 'PLAY'),
+		line1   => $station->{name},
+		line2   => join(' · ', grep { $_ } ($station->{country}, $station->{genre}, uc($station->{source} || ''))),
+		url     => $station->{stream_url},
+		bitrate => $station->{bitrate} || 0,
+	});
+
+	if ($store->is_favorite($uid)) {
+		push @items, {
+			type => 'link',
+			name => cstring($client, 'PLUGIN_FREERADIO_REMOVE_FAVORITE'),
+			url  => \&removeFavoriteHandler,
+			passthrough => [ { uid => $uid } ],
+		};
+	}
+	else {
+		push @items, {
+			type => 'link',
+			name => cstring($client, 'PLUGIN_FREERADIO_ADD_FAVORITE'),
+			url  => \&addFavoriteHandler,
+			passthrough => [ { uid => $uid } ],
+		};
+	}
+
+	$cb->({ items => \@items });
+}
+
+sub _provider_enabled {
+	my ($provider_id) = @_;
+	return $prefs->get('enable_icecast')   ? 1 : 0 if $provider_id eq 'icecast';
+	return $prefs->get('enable_shoutcast') ? 1 : 0 if $provider_id eq 'shoutcast';
+	return 1;
+}
+
+sub _parse_filter_values {
+	my ($raw) = @_;
+	return {} unless defined $raw && length $raw;
+	my %set = map { lc($_) => 1 } grep { length $_ } map {
+		s/^\s+|\s+$//gr
+	} split(/[,\n\r]+/, $raw);
+	return \%set;
+}
+
+sub _station_allowed {
+	my ($station, $include_genres, $exclude_genres, $include_countries, $exclude_countries) = @_;
+	my $genre = lc(($station->{genre} // '') =~ s/^\s+|\s+$//gr);
+	my $country = lc(($station->{country} // '') =~ s/^\s+|\s+$//gr);
+
+	return 0 if %$exclude_genres && $genre && $exclude_genres->{$genre};
+	return 0 if %$exclude_countries && $country && $exclude_countries->{$country};
+	return 0 if %$include_genres && (!$genre || !$include_genres->{$genre});
+	return 0 if %$include_countries && (!$country || !$include_countries->{$country});
+	return 1;
+}
+
+sub _apply_station_filters {
+	my ($stations) = @_;
+	$stations ||= [];
+
+	my $include_genres = _parse_filter_values($prefs->get('include_genres'));
+	my $exclude_genres = _parse_filter_values($prefs->get('exclude_genres'));
+	my $include_countries = _parse_filter_values($prefs->get('include_countries'));
+	my $exclude_countries = _parse_filter_values($prefs->get('exclude_countries'));
+
+	return $stations
+		if !%$include_genres && !%$exclude_genres && !%$include_countries && !%$exclude_countries;
+
+	my @filtered = grep {
+		_station_allowed($_, $include_genres, $exclude_genres, $include_countries, $exclude_countries)
+	} @$stations;
+
+	return \@filtered;
 }
 
 sub _station_items {
@@ -313,6 +618,17 @@ sub _station_items {
 			url   => sub {
 				my ($c, $innerCb) = @_;
 				$innerCb->({ items => \@subItems });
+			},
+			jive => {
+				actions => {
+					play => {
+						command     => [ 'playlist', 'play' ],
+						fixedParams => {
+							url => $row->{stream_url},
+						},
+						nextWindow => 'nowPlaying',
+					},
+				},
 			},
 		};
 	}

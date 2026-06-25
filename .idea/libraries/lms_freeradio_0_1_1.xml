@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="lms-freeradio-0.1.1">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/lms-freeradio-0.1.1.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

@@ -7,7 +7,7 @@ use File::Spec::Functions qw(catfile);
 
 use Slim::Utils::Prefs;
 
-my %allowedFields = map { $_ => 1 } qw(genre country source);
+my %allowedFields = map { $_ => 1 } qw(genre country source codec);
 
 sub new {
 	my ($class, %args) = @_;
@@ -60,16 +60,95 @@ sub _init {
 			network TEXT,
 			channel TEXT,
 			search_text TEXT,
-			last_seen_at INTEGER NOT NULL,
-			raw_payload TEXT
+			last_seen_at INTEGER NOT NULL
 		)
 	});
+
+	# Drop legacy raw_payload column if it exists (SQLite >= 3.35).
+	eval {
+		my $cols = $dbh->selectall_arrayref('PRAGMA table_info(stations)');
+		if (grep { $_->[1] eq 'raw_payload' } @$cols) {
+			$dbh->do('ALTER TABLE stations DROP COLUMN raw_payload');
+		}
+	};
 
 	$dbh->do('CREATE INDEX IF NOT EXISTS idx_stations_source ON stations(source)');
 	$dbh->do('CREATE INDEX IF NOT EXISTS idx_stations_genre ON stations(genre)');
 	$dbh->do('CREATE INDEX IF NOT EXISTS idx_stations_country ON stations(country)');
 	$dbh->do('CREATE INDEX IF NOT EXISTS idx_stations_search_text ON stations(search_text)');
 	$dbh->do('CREATE INDEX IF NOT EXISTS idx_stations_seen ON stations(last_seen_at)');
+
+	$dbh->do(qq{
+		CREATE TABLE IF NOT EXISTS genre_index (
+			genre_key TEXT PRIMARY KEY,
+			genre_label TEXT NOT NULL,
+			station_count INTEGER NOT NULL
+		)
+	});
+	$dbh->do('CREATE INDEX IF NOT EXISTS idx_genre_index_count ON genre_index(station_count DESC)');
+
+	$dbh->do(qq{
+		CREATE TABLE IF NOT EXISTS genre_station_index (
+			genre_key TEXT NOT NULL,
+			station_uid TEXT NOT NULL,
+			PRIMARY KEY (genre_key, station_uid)
+		)
+	});
+	$dbh->do('CREATE INDEX IF NOT EXISTS idx_genre_station_uid ON genre_station_index(station_uid)');
+
+	$dbh->do(qq{
+		CREATE TABLE IF NOT EXISTS station_name_index (
+			station_name_key TEXT PRIMARY KEY,
+			station_name_label TEXT NOT NULL,
+			station_count INTEGER NOT NULL
+		)
+	});
+	$dbh->do('CREATE INDEX IF NOT EXISTS idx_station_name_index_count ON station_name_index(station_count DESC)');
+
+	$dbh->do(qq{
+		CREATE TABLE IF NOT EXISTS station_name_station_index (
+			station_name_key TEXT NOT NULL,
+			station_uid TEXT NOT NULL,
+			PRIMARY KEY (station_name_key, station_uid)
+		)
+	});
+	$dbh->do('CREATE INDEX IF NOT EXISTS idx_station_name_station_uid ON station_name_station_index(station_uid)');
+
+	$dbh->do(qq{
+		CREATE TABLE IF NOT EXISTS bitrate_quality_index (
+			quality_key TEXT PRIMARY KEY,
+			quality_label TEXT NOT NULL,
+			station_count INTEGER NOT NULL
+		)
+	});
+	$dbh->do('CREATE INDEX IF NOT EXISTS idx_bitrate_quality_count ON bitrate_quality_index(station_count DESC)');
+
+	$dbh->do(qq{
+		CREATE TABLE IF NOT EXISTS bitrate_quality_station_index (
+			quality_key TEXT NOT NULL,
+			station_uid TEXT NOT NULL,
+			PRIMARY KEY (quality_key, station_uid)
+		)
+	});
+	$dbh->do('CREATE INDEX IF NOT EXISTS idx_bitrate_quality_station_uid ON bitrate_quality_station_index(station_uid)');
+
+	$dbh->do(qq{
+		CREATE TABLE IF NOT EXISTS codec_index (
+			codec_key TEXT PRIMARY KEY,
+			codec_label TEXT NOT NULL,
+			station_count INTEGER NOT NULL
+		)
+	});
+	$dbh->do('CREATE INDEX IF NOT EXISTS idx_codec_index_count ON codec_index(station_count DESC)');
+
+	$dbh->do(qq{
+		CREATE TABLE IF NOT EXISTS codec_station_index (
+			codec_key TEXT NOT NULL,
+			station_uid TEXT NOT NULL,
+			PRIMARY KEY (codec_key, station_uid)
+		)
+	});
+	$dbh->do('CREATE INDEX IF NOT EXISTS idx_codec_station_uid ON codec_station_index(station_uid)');
 
 	$dbh->do(qq{
 		CREATE TABLE IF NOT EXISTS favorites (
@@ -126,8 +205,8 @@ sub replace_source_stations {
 			INSERT INTO stations (
 				uid, source, source_id, name, description, country, genre,
 				stream_url, codec, bitrate, homepage, network, channel,
-				search_text, last_seen_at, raw_payload
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				search_text, last_seen_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		});
 
 		for my $station (@$stations) {
@@ -147,9 +226,10 @@ sub replace_source_stations {
 				$station->{channel},
 				$station->{search_text},
 				$station->{last_seen_at},
-				$station->{raw_payload},
 			);
 		}
+
+		$self->_rebuild_indexes($dbh);
 
 		$dbh->commit;
 		1;
@@ -158,6 +238,24 @@ sub replace_source_stations {
 		eval { $dbh->rollback };
 		die $err;
 	};
+}
+
+sub clear_stations {
+	my ($self) = @_;
+	$self->dbh->do('DELETE FROM stations');
+	$self->dbh->do('DELETE FROM genre_station_index');
+	$self->dbh->do('DELETE FROM genre_index');
+	$self->dbh->do('DELETE FROM station_name_station_index');
+	$self->dbh->do('DELETE FROM station_name_index');
+	$self->dbh->do('DELETE FROM bitrate_quality_station_index');
+	$self->dbh->do('DELETE FROM bitrate_quality_index');
+	$self->dbh->do('DELETE FROM codec_station_index');
+	$self->dbh->do('DELETE FROM codec_index');
+}
+
+sub clear_sync_state {
+	my ($self) = @_;
+	$self->dbh->do('DELETE FROM sync_state');
 }
 
 sub search_stations {
@@ -210,6 +308,20 @@ sub list_distinct_values {
 	my ($self, $field) = @_;
 	die "invalid field $field" unless $allowedFields{$field};
 
+	if ($field eq 'genre') {
+		my $sth = $self->dbh->prepare(q{
+			SELECT genre_label AS value
+			FROM genre_index
+			ORDER BY station_count DESC, genre_label COLLATE NOCASE ASC
+		});
+		$sth->execute();
+		my @values;
+		while (my ($value) = $sth->fetchrow_array) {
+			push @values, $value;
+		}
+		return \@values;
+	}
+
 	my $sth = $self->dbh->prepare("SELECT DISTINCT $field AS value FROM stations WHERE $field IS NOT NULL AND $field != '' ORDER BY value COLLATE NOCASE");
 	$sth->execute();
 
@@ -219,6 +331,170 @@ sub list_distinct_values {
 	}
 
 	return \@values;
+}
+
+sub list_genre_index {
+	my ($self) = @_;
+	my $sth = $self->dbh->prepare(q{
+		SELECT genre_key, genre_label, station_count
+		FROM genre_index
+		ORDER BY station_count DESC, genre_label COLLATE NOCASE ASC
+	});
+	$sth->execute();
+
+	my @rows;
+	while (my $row = $sth->fetchrow_hashref) {
+		push @rows, $row;
+	}
+	return \@rows;
+}
+
+sub search_stations_by_genre_key {
+	my ($self, %args) = @_;
+	my $genre_key = $args{genre_key};
+	my $limit = $args{limit} || 100;
+	my $offset = $args{offset} || 0;
+	return [] unless defined $genre_key && length $genre_key;
+
+	my $sth = $self->dbh->prepare(q{
+		SELECT s.uid, s.source, s.source_id, s.name, s.description, s.country, s.genre,
+		       s.stream_url, s.codec, s.bitrate, s.homepage, s.network, s.channel, s.search_text
+		FROM genre_station_index gsi
+		JOIN stations s ON s.uid = gsi.station_uid
+		WHERE gsi.genre_key = ?
+		ORDER BY s.name COLLATE NOCASE ASC
+		LIMIT ? OFFSET ?
+	});
+	$sth->execute($genre_key, $limit, $offset);
+
+	my @rows;
+	while (my $row = $sth->fetchrow_hashref) {
+		push @rows, $row;
+	}
+	return \@rows;
+}
+
+sub list_station_name_index {
+	my ($self) = @_;
+	my $sth = $self->dbh->prepare(q{
+		SELECT station_name_key, station_name_label, station_count
+		FROM station_name_index
+		ORDER BY station_count DESC, station_name_label COLLATE NOCASE ASC
+	});
+	$sth->execute();
+
+	my @rows;
+	while (my $row = $sth->fetchrow_hashref) {
+		push @rows, $row;
+	}
+	return \@rows;
+}
+
+sub search_stations_by_station_name_key {
+	my ($self, %args) = @_;
+	my $station_name_key = $args{station_name_key};
+	my $limit = $args{limit} || 100;
+	my $offset = $args{offset} || 0;
+	return [] unless defined $station_name_key && length $station_name_key;
+
+	my $sth = $self->dbh->prepare(q{
+		SELECT s.uid, s.source, s.source_id, s.name, s.description, s.country, s.genre,
+		       s.stream_url, s.codec, s.bitrate, s.homepage, s.network, s.channel, s.search_text
+		FROM station_name_station_index snsi
+		JOIN stations s ON s.uid = snsi.station_uid
+		WHERE snsi.station_name_key = ?
+		ORDER BY s.name COLLATE NOCASE ASC
+		LIMIT ? OFFSET ?
+	});
+	$sth->execute($station_name_key, $limit, $offset);
+
+	my @rows;
+	while (my $row = $sth->fetchrow_hashref) {
+		push @rows, $row;
+	}
+	return \@rows;
+}
+
+sub list_bitrate_quality_index {
+	my ($self) = @_;
+	my $sth = $self->dbh->prepare(q{
+		SELECT quality_key, quality_label, station_count
+		FROM bitrate_quality_index
+		ORDER BY station_count DESC, quality_label COLLATE NOCASE ASC
+	});
+	$sth->execute();
+
+	my @rows;
+	while (my $row = $sth->fetchrow_hashref) {
+		push @rows, $row;
+	}
+	return \@rows;
+}
+
+sub search_stations_by_quality_key {
+	my ($self, %args) = @_;
+	my $quality_key = $args{quality_key};
+	my $limit = $args{limit} || 100;
+	my $offset = $args{offset} || 0;
+	return [] unless defined $quality_key && length $quality_key;
+
+	my $sth = $self->dbh->prepare(q{
+		SELECT s.uid, s.source, s.source_id, s.name, s.description, s.country, s.genre,
+		       s.stream_url, s.codec, s.bitrate, s.homepage, s.network, s.channel, s.search_text
+		FROM bitrate_quality_station_index bqsi
+		JOIN stations s ON s.uid = bqsi.station_uid
+		WHERE bqsi.quality_key = ?
+		ORDER BY s.name COLLATE NOCASE ASC
+		LIMIT ? OFFSET ?
+	});
+	$sth->execute($quality_key, $limit, $offset);
+
+	my @rows;
+	while (my $row = $sth->fetchrow_hashref) {
+		push @rows, $row;
+	}
+	return \@rows;
+}
+
+sub list_codec_index {
+	my ($self) = @_;
+	my $sth = $self->dbh->prepare(q{
+		SELECT codec_key, codec_label, station_count
+		FROM codec_index
+		ORDER BY station_count DESC, codec_label COLLATE NOCASE ASC
+	});
+	$sth->execute();
+
+	my @rows;
+	while (my $row = $sth->fetchrow_hashref) {
+		push @rows, $row;
+	}
+	return \@rows;
+}
+
+sub search_stations_by_codec_key {
+	my ($self, %args) = @_;
+	my $codec_key = $args{codec_key};
+	my $limit = $args{limit} || 100;
+	my $offset = $args{offset} || 0;
+	return [] unless defined $codec_key && length $codec_key;
+
+	my $sth = $self->dbh->prepare(q{
+		SELECT s.uid, s.source, s.source_id, s.name, s.description, s.country, s.genre,
+		       s.stream_url, s.codec, s.bitrate, s.homepage, s.network, s.channel, s.search_text
+		FROM codec_station_index csi
+		JOIN stations s ON s.uid = csi.station_uid
+		WHERE csi.codec_key = ?
+		ORDER BY s.name COLLATE NOCASE ASC
+		LIMIT ? OFFSET ?
+	});
+	$sth->execute($codec_key, $limit, $offset);
+
+	my @rows;
+	while (my $row = $sth->fetchrow_hashref) {
+		push @rows, $row;
+	}
+	return \@rows;
 }
 
 sub add_favorite {
@@ -284,8 +560,14 @@ sub list_favorites {
 sub record_search {
 	my ($self, $query) = @_;
 	return unless defined $query && $query ne '';
-	my $sth = $self->dbh->prepare('INSERT INTO search_history (query, created_at) VALUES (?, ?)');
-	$sth->execute($query, time());
+	eval {
+		my $sth = $self->dbh->prepare('INSERT INTO search_history (query, created_at) VALUES (?, ?)');
+		$sth->execute($query, time());
+		1;
+	} or do {
+		my $err = $@ || 'unknown sqlite error';
+		$self->{log} && $self->{log}->warn("failed recording search history: $err");
+	};
 }
 
 sub set_sync_state {
@@ -309,6 +591,309 @@ sub count_stations {
 	my ($self) = @_;
 	my ($count) = $self->dbh->selectrow_array('SELECT COUNT(*) FROM stations');
 	return $count || 0;
+}
+
+sub get_station_by_uid {
+	my ($self, $uid) = @_;
+	return unless defined $uid && length $uid;
+
+	my $sth = $self->dbh->prepare(q{
+		SELECT uid, source, source_id, name, description, country, genre,
+		       stream_url, codec, bitrate, homepage, network, channel, search_text
+		FROM stations
+		WHERE uid = ?
+		LIMIT 1
+	});
+	$sth->execute($uid);
+	return $sth->fetchrow_hashref;
+}
+
+sub get_station_by_stream_url {
+	my ($self, $url) = @_;
+	return unless defined $url && length $url;
+
+	my $sth = $self->dbh->prepare(q{
+		SELECT uid, source, source_id, name, description, country, genre,
+		       stream_url, codec, bitrate, homepage, network, channel, search_text
+		FROM stations
+		WHERE stream_url = ?
+		LIMIT 1
+	});
+	$sth->execute($url);
+	my $row = $sth->fetchrow_hashref;
+	return $row if $row;
+
+	# Fallback: strip query params for rough matching.
+	(my $base = $url) =~ s/\?.*$//;
+	return unless length $base;
+
+	$sth = $self->dbh->prepare(q{
+		SELECT uid, source, source_id, name, description, country, genre,
+		       stream_url, codec, bitrate, homepage, network, channel, search_text
+		FROM stations
+		WHERE stream_url = ?
+		   OR stream_url LIKE ?
+		LIMIT 1
+	});
+	$sth->execute($base, $base . '?%');
+	return $sth->fetchrow_hashref;
+}
+
+sub is_favorite {
+	my ($self, $uid) = @_;
+	return 0 unless defined $uid && length $uid;
+	my ($exists) = $self->dbh->selectrow_array('SELECT 1 FROM favorites WHERE uid = ? LIMIT 1', undef, $uid);
+	return $exists ? 1 : 0;
+}
+
+sub _rebuild_indexes {
+	my ($self, $dbh) = @_;
+	$dbh ||= $self->dbh;
+
+	$dbh->do('DELETE FROM genre_station_index');
+	$dbh->do('DELETE FROM genre_index');
+	$dbh->do('DELETE FROM station_name_station_index');
+	$dbh->do('DELETE FROM station_name_index');
+	$dbh->do('DELETE FROM bitrate_quality_station_index');
+	$dbh->do('DELETE FROM bitrate_quality_index');
+	$dbh->do('DELETE FROM codec_station_index');
+	$dbh->do('DELETE FROM codec_index');
+
+	my $rows = $dbh->selectall_arrayref(
+		q{SELECT uid, genre, name, bitrate, codec FROM stations},
+		{ Slice => {} }
+	) || [];
+
+	my (%genreCounts, %genreLabel, %genreStationSeen);
+	my (%stationNameCounts, %stationNameLabel, %stationNameStationSeen);
+	my (%qualityCounts, %qualityStationSeen);
+	my (%codecCounts, %codecStationSeen);
+
+	for my $row (@$rows) {
+		my $uid = $row->{uid};
+		next unless defined $uid && length $uid;
+
+		my $genreTokens = _extract_genre_tokens($row->{genre});
+		for my $token (@$genreTokens) {
+			my ($key, $label) = @$token;
+			next if $genreStationSeen{$key}{$uid}++;
+			$genreCounts{$key}++;
+			$genreLabel{$key} ||= $label;
+		}
+
+		my ($nameKey, $nameLabel) = _normalize_station_name($row->{name});
+		if ($nameKey) {
+			if (!$stationNameStationSeen{$nameKey}{$uid}++) {
+				$stationNameCounts{$nameKey}++;
+				$stationNameLabel{$nameKey} ||= $nameLabel;
+			}
+		}
+
+		my ($qualityKey, $qualityLabel) = _bitrate_quality($row->{bitrate});
+		if (!$qualityStationSeen{$qualityKey}{$uid}++) {
+			$qualityCounts{$qualityKey}++;
+		}
+
+		my $codecKey = lc($row->{codec} || '');
+		if ($codecKey && $codecKey =~ /^(?:mp3|aac|ogg|opus|flac|webm)$/) {
+			if (!$codecStationSeen{$codecKey}{$uid}++) {
+				$codecCounts{$codecKey}++;
+			}
+		}
+	}
+
+	my @genreKeys = sort {
+		$genreCounts{$b} <=> $genreCounts{$a}
+			|| lc($genreLabel{$a}) cmp lc($genreLabel{$b})
+	} grep { $genreCounts{$_} > 10 } keys %genreCounts;
+	@genreKeys = @genreKeys[0 .. 49] if @genreKeys > 50;
+
+	my $insertGenre = $dbh->prepare(
+		'INSERT INTO genre_index (genre_key, genre_label, station_count) VALUES (?, ?, ?)'
+	);
+	my $insertGenreRel = $dbh->prepare(
+		'INSERT INTO genre_station_index (genre_key, station_uid) VALUES (?, ?)'
+	);
+	for my $key (@genreKeys) {
+		$insertGenre->execute($key, $genreLabel{$key}, $genreCounts{$key});
+		for my $uid (keys %{ $genreStationSeen{$key} || {} }) {
+			$insertGenreRel->execute($key, $uid);
+		}
+	}
+
+	my @stationNameKeys = sort {
+		$stationNameCounts{$b} <=> $stationNameCounts{$a}
+			|| lc($stationNameLabel{$a}) cmp lc($stationNameLabel{$b})
+	} grep { $stationNameCounts{$_} > 2 } keys %stationNameCounts;
+	@stationNameKeys = @stationNameKeys[0 .. 49] if @stationNameKeys > 50;
+
+	my $insertStationName = $dbh->prepare(
+		'INSERT INTO station_name_index (station_name_key, station_name_label, station_count) VALUES (?, ?, ?)'
+	);
+	my $insertStationNameRel = $dbh->prepare(
+		'INSERT INTO station_name_station_index (station_name_key, station_uid) VALUES (?, ?)'
+	);
+	for my $key (@stationNameKeys) {
+		$insertStationName->execute($key, $stationNameLabel{$key}, $stationNameCounts{$key});
+		for my $uid (keys %{ $stationNameStationSeen{$key} || {} }) {
+			$insertStationNameRel->execute($key, $uid);
+		}
+	}
+
+	my @qualityOrder = qw(unknown very_low low medium high very_high);
+	my %qualityLabel = (
+		unknown   => 'Unknown bitrate',
+		very_low  => '< 64 kbps',
+		low       => '64-95 kbps',
+		medium    => '96-127 kbps',
+		high      => '128-191 kbps',
+		very_high => '>= 192 kbps',
+	);
+	my $insertQuality = $dbh->prepare(
+		'INSERT INTO bitrate_quality_index (quality_key, quality_label, station_count) VALUES (?, ?, ?)'
+	);
+	my $insertQualityRel = $dbh->prepare(
+		'INSERT INTO bitrate_quality_station_index (quality_key, station_uid) VALUES (?, ?)'
+	);
+	for my $qualityKey (@qualityOrder) {
+		my $count = $qualityCounts{$qualityKey} || 0;
+		next unless $count;
+		$insertQuality->execute($qualityKey, $qualityLabel{$qualityKey}, $count);
+		for my $uid (keys %{ $qualityStationSeen{$qualityKey} || {} }) {
+			$insertQualityRel->execute($qualityKey, $uid);
+		}
+	}
+
+	my %codecLabel = (
+		mp3  => 'MP3',
+		aac  => 'AAC',
+		ogg  => 'OGG',
+		opus => 'OPUS',
+		flac => 'FLAC',
+		webm => 'WebM',
+	);
+	my @codecOrder = qw(mp3 aac ogg opus flac webm);
+	my $insertCodec = $dbh->prepare(
+		'INSERT INTO codec_index (codec_key, codec_label, station_count) VALUES (?, ?, ?)'
+	);
+	my $insertCodecRel = $dbh->prepare(
+		'INSERT INTO codec_station_index (codec_key, station_uid) VALUES (?, ?)'
+	);
+	for my $codecKey (@codecOrder) {
+		my $count = $codecCounts{$codecKey} || 0;
+		next unless $count;
+		$insertCodec->execute($codecKey, $codecLabel{$codecKey}, $count);
+		for my $uid (keys %{ $codecStationSeen{$codecKey} || {} }) {
+			$insertCodecRel->execute($codecKey, $uid);
+		}
+	}
+}
+
+sub _extract_genre_tokens {
+	my ($value) = @_;
+	return [] unless defined $value;
+	$value =~ s/^\s+|\s+$//g;
+	return [] unless length $value;
+
+	my @parts = split /\s*(?:,|;|\/|\||&amp;)\s*/i, $value;
+	my @tokens;
+	my %seen;
+	for my $part (@parts) {
+		my ($key, $label) = _canonical_genre_token($part);
+		next unless $key;
+		next if $seen{$key}++;
+		push @tokens, [ $key, $label ];
+	}
+	return \@tokens;
+}
+
+sub _canonical_genre_token {
+	my ($token) = @_;
+	return unless defined $token;
+	$token =~ s/^\s+|\s+$//g;
+	$token =~ s/\s+/ /g;
+	return unless length $token;
+
+	my $key = lc($token);
+	$key =~ s/[^a-z0-9&+ ]+/ /g;
+	$key =~ s/\s+/ /g;
+	$key =~ s/^\s+|\s+$//g;
+	return unless length $key;
+	return if $key =~ /^\d+$/;
+	return if length($key) < 3;
+	return if $key =~ /(?:https?:\/\/|www\.|\.com|\.net|\.org)/;
+
+	my %alias = (
+		'dnb'          => 'drum and bass',
+		'drum n bass'  => 'drum and bass',
+		'drum & bass'  => 'drum and bass',
+		'rnb'          => 'r&b',
+		'r and b'      => 'r&b',
+		'rhythm and blues' => 'r&b',
+		'electro'      => 'electronic',
+		'electronica'  => 'electronic',
+		'edm'          => 'electronic',
+		'hip hop'      => 'hip-hop',
+		'hiphop'       => 'hip-hop',
+	);
+	$key = $alias{$key} if $alias{$key};
+
+	my %stop = map { $_ => 1 } qw(
+		misc other unknown various mix mixed test stream webradio radio online
+		null genre unspecified assorted general general music
+	);
+	return if $stop{$key};
+
+	my $label = _title_case($key);
+	$label =~ s/\bR&b\b/R&B/g;
+	$label =~ s/\bHip-Hop\b/Hip-Hop/g;
+	return ($key, $label);
+}
+
+sub _normalize_station_name {
+	my ($name) = @_;
+	return unless defined $name;
+	$name =~ s/^\s+|\s+$//g;
+	return unless length $name;
+
+	my %junk = map { $_ => 1 } (
+		'online radio', 'my radio', 'my station', 'my station name',
+		'default stream', 'stream', 'radio stream', 'live stream',
+		'unspecified name', 'no name', 'station name', 'this is my server name',
+		'orban opticodec-pc encoder', 'mb studio', 'pregacao', 'mb studio pro',
+		'icecast server', 'shoutcast server', 'internet radio',
+	);
+	return if $junk{ lc($name) };
+
+	my $label = $name;
+	my $key = lc($name);
+	$key =~ s/\[[^\]]+\]//g;
+	$key =~ s/\([^\)]*\)//g;
+	$key =~ s/\b\d{2,3}\s*kbps\b//g;
+	$key =~ s/[^a-z0-9]+/ /g;
+	$key =~ s/\s+/ /g;
+	$key =~ s/^\s+|\s+$//g;
+	return unless length $key;
+	return if length($key) < 3;
+	return ($key, $label);
+}
+
+sub _bitrate_quality {
+	my ($bitrate) = @_;
+	$bitrate = int($bitrate || 0);
+	return ('unknown', 'Unknown bitrate') if $bitrate <= 0;
+	return ('very_low', '< 64 kbps') if $bitrate < 64;
+	return ('low', '64-95 kbps') if $bitrate < 96;
+	return ('medium', '96-127 kbps') if $bitrate < 128;
+	return ('high', '128-191 kbps') if $bitrate < 192;
+	return ('very_high', '>= 192 kbps');
+}
+
+sub _title_case {
+	my ($text) = @_;
+	return '' unless defined $text;
+	$text =~ s/\b([a-z])/\U$1/g;
+	return $text;
 }
 
 1;

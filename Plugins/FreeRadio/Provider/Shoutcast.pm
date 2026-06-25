@@ -18,22 +18,62 @@ sub fetch_stations {
 	if (!$apiKey) {
 		# Skip SHOUTcast if no API key configured
 		# Icecast provider will handle station listings instead
-		main::INFOLOG && $self->{log}->is_info && $self->{log}->info('SHOUTcast API key not configured, skipping SHOUTcast provider');
-		$cb->([]);
+		if (!$self->{_missing_api_key_logged}) {
+			main::INFOLOG && $self->{log}->is_info && $self->{log}->info('SHOUTcast API key not configured, skipping SHOUTcast provider');
+			$self->{_missing_api_key_logged} = 1;
+		}
+		$cb->([], { total_available => 0 });
 		return;
 	}
+	delete $self->{_missing_api_key_logged};
 
-	my $url = sprintf('https://api.shoutcast.com/station/advancedsearch?f=json&k=%s&limit=500', $apiKey);
+	my $limit = 500;
+	my @all;
+	my $offset = 0;
+	my $total_hint;
+	my $max_pages = 40;
 
-	$self->_fetch_json(
-		$url,
-		sub {
-			my $payload = shift || {};
-			my $stations = _extract_stations($payload);
-			$cb->($stations);
-		},
-		$eb,
-	);
+	my $fetch_page;
+	$fetch_page = sub {
+		my $url = sprintf(
+			'https://api.shoutcast.com/station/advancedsearch?f=json&k=%s&limit=%d&offset=%d',
+			$apiKey,
+			$limit,
+			$offset,
+		);
+
+		$self->_fetch_json(
+			$url,
+			sub {
+				my $payload = shift || {};
+				my $stations = _extract_stations($payload);
+				my $page_count = scalar @$stations;
+				my $this_total = _extract_total_hint($payload);
+				$total_hint = $this_total if $this_total && (!$total_hint || $this_total > $total_hint);
+
+				push @all, @$stations if $page_count;
+				$max_pages--;
+
+				if (
+					!$page_count
+					|| $page_count < $limit
+					|| ($total_hint && scalar(@all) >= $total_hint)
+					|| $max_pages <= 0
+				) {
+					$cb->(\@all, {
+						total_available => $total_hint || scalar(@all),
+					});
+					return;
+				}
+
+				$offset += $limit;
+				$fetch_page->();
+			},
+			$eb,
+		);
+	};
+
+	$fetch_page->();
 }
 
 sub _extract_stations {
@@ -90,6 +130,31 @@ sub _walk_payload {
 			_walk_payload($entry, $collector);
 		}
 	}
+}
+
+sub _extract_total_hint {
+	my ($payload) = @_;
+	return unless ref($payload) eq 'HASH';
+
+	my @candidates;
+	for my $k (qw(total totalfound totalFound resultcount resultCount count)) {
+		push @candidates, $payload->{$k} if defined $payload->{$k};
+	}
+
+	if (ref($payload->{response}) eq 'HASH') {
+		for my $k (qw(total totalfound totalFound resultcount resultCount count)) {
+			push @candidates, $payload->{response}->{$k} if defined $payload->{response}->{$k};
+		}
+	}
+
+	for my $value (@candidates) {
+		next unless defined $value;
+		if ($value =~ /^\d+$/) {
+			return int($value);
+		}
+	}
+
+	return;
 }
 
 1;
