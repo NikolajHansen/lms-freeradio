@@ -44,4 +44,10 @@
 		<input type="submit" class="stdclick" name="syncNow" value="[% "PLUGIN_FREERADIO_SYNC_NOW" | string %]">
 	[% END %]
 
+	[% WRAPPER setting title="PLUGIN_FREERADIO_GENRES_TITLE" desc="PLUGIN_FREERADIO_GENRES_DESC" %]
+		<textarea class="stdedit" name="genres_text" cols="60" rows="18">[% genres_text | html %]</textarea>
+		<br/>
+		<input type="submit" class="stdclick" name="saveGenres" value="[% "PLUGIN_FREERADIO_GENRES_SAVE" | string %]">
+	[% END %]
+
 [% PROCESS settings/footer.html %]

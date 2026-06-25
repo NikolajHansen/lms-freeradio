@@ -91,7 +91,15 @@ PLUGIN_FREERADIO_PROGRESS_INDEXING
 PLUGIN_FREERADIO_PROGRESS_PROVIDER_DONE
 	EN	Indexed %s stations from %s
 
-PLUGIN_FREERADIO_PROGRESS_DONE
-	EN	FreeRadio sync complete
+PLUGIN_FREERADIO_GENRES_TITLE
+	EN	Genre Mapping
+
+PLUGIN_FREERADIO_GENRES_DESC
+	EN	One genre per line: Label: keyword1, keyword2, ... Stations are matched by substring against keywords (case-insensitive). Resync after saving.
+
+PLUGIN_FREERADIO_GENRES_SAVE
+	EN	Save Genres
+
+
 
 

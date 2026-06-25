@@ -76,9 +76,12 @@ sub _load_stations {
 }
 
 # ------------------------------------------------------------------
-# Genre index: stopwords excluded
+# Genre index: canonical genres used; non-matching genres excluded
 # ------------------------------------------------------------------
-subtest 'genre stopwords excluded from index' => sub {
+subtest 'genre canonical matching works' => sub {
+    # Seed default canonical genres first
+    $store->sync_canonical_genres(undef);
+
     my @stations = map {
         {
             uid          => "uid-$_->[0]",
@@ -93,20 +96,14 @@ subtest 'genre stopwords excluded from index' => sub {
         }
     } (
         [1, 'Pop'],
-        [2, 'Pop'],
-        [3, 'Pop'],
-        [4, 'Pop'],
-        [5, 'Pop'],
-        [6, 'Pop'],
-        [7, 'Pop'],
-        [8, 'Pop'],
-        [9, 'Pop'],
-        [10, 'Pop'],
-        [11, 'Pop'],  # 11 Pop stations to exceed threshold of 10
-        [12, 'Null'],
-        [13, 'Genre'],
-        [14, 'Unspecified'],
-        [15, 'Assorted'],
+        [2, 'pop music'],
+        [3, 'Top 40'],
+        [4, 'Rock'],
+        [5, 'rock classic'],
+        [6, 'Null'],
+        [7, 'Unspecified'],
+        [8, 'Various'],
+        [9, 'Assorted'],
     );
 
     _load_stations($store, @stations);
@@ -114,11 +111,12 @@ subtest 'genre stopwords excluded from index' => sub {
     my $genres = $store->list_genre_index();
     my %genre_labels = map { $_->{genre_label} => 1 } @$genres;
 
-    ok($genre_labels{Pop}, 'Pop genre is in index');
-    ok(!$genre_labels{Null},        'Null stopword excluded');
-    ok(!$genre_labels{Genre},       'Genre stopword excluded');
-    ok(!$genre_labels{Unspecified}, 'Unspecified stopword excluded');
-    ok(!$genre_labels{Assorted},    'Assorted stopword excluded');
+    ok($genre_labels{Pop},  'Pop canonical genre matched');
+    ok($genre_labels{Rock}, 'Rock canonical genre matched');
+    ok(!$genre_labels{Null},        'Null not in canonical index');
+    ok(!$genre_labels{Unspecified}, 'Unspecified not in canonical index');
+    ok(!$genre_labels{Various},     'Various not in canonical index');
+    ok(!$genre_labels{Assorted},    'Assorted not in canonical index');
 };
 
 # ------------------------------------------------------------------

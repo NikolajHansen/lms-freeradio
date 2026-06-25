@@ -30,13 +30,29 @@ sub prefs {
 sub handler {
 	my ($class, $client, $params, $callback, @args) = @_;
 
-	$params->{pref_enable_icecast} = $params->{pref_enable_icecast} ? 1 : 0;
+	$params->{pref_enable_icecast}   = $params->{pref_enable_icecast}   ? 1 : 0;
 	$params->{pref_enable_shoutcast} = $params->{pref_enable_shoutcast} ? 1 : 0;
+
+	require Plugins::FreeRadio::Plugin;
+	my $store = Plugins::FreeRadio::Plugin::get_store();
+
+	if ($params->{saveGenres} && $store) {
+		my $text = $params->{genres_text} // '';
+		$prefs->set('canonical_genres_text', $text);
+		$store->sync_canonical_genres($text);
+	}
+
+	if ($store) {
+		$params->{genres_text} = $store->genres_as_text();
+	}
+	else {
+		require Plugins::FreeRadio::Store;
+		$params->{genres_text} = Plugins::FreeRadio::Store::DEFAULT_GENRES_TEXT;
+	}
 
 	my $body = $class->SUPER::handler($client, $params, $callback, @args);
 
 	if ($params->{syncNow}) {
-		require Plugins::FreeRadio::Plugin;
 		Plugins::FreeRadio::Plugin::requestScannerSync();
 	}
 

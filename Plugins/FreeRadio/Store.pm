@@ -185,10 +185,102 @@ sub _init {
 			updated_at INTEGER NOT NULL
 		)
 	});
+
+	$dbh->do(qq{
+		CREATE TABLE IF NOT EXISTS canonical_genres (
+			sort_order INTEGER NOT NULL,
+			label      TEXT NOT NULL,
+			keywords   TEXT NOT NULL
+		)
+	});
 }
 
 sub dbh {
 	return $_[0]->{dbh};
+}
+
+use constant DEFAULT_GENRES_TEXT => <<'END_GENRES';
+Pop: pop, top 40, pop music, chart, hits, popular, adult contemporary, easy listening
+Rock: rock, classic rock, hard rock, punk, grunge, alternative, indie, prog
+Metal: metal, heavy metal, death metal, black metal, thrash, doom
+Jazz: jazz, smooth jazz, jazz fusion, bebop, big band, swing, blues jazz
+Classical: classical, symphony, orchestra, opera, baroque, chamber
+Electronic: electronic, edm, techno, trance, house, dance, ambient, dubstep, drum and bass, electro, electronica
+Country: country, americana, bluegrass, western, outlaw country
+Hip-Hop: hip-hop, hip hop, hiphop, rap, urban, rnb, r&b, rhythm and blues
+World: world, latin, reggae, folk, ethnic, celtic, salsa, cumbia, afrobeat
+News & Talk: news, talk, speech, information, public radio, commentary, politics
+Christian: christian, gospel, religious, worship, praise, spiritual, inspirational
+Oldies: oldies, 60s, 70s, 80s, 90s, retro, throwback, classic hits, nostalgia
+Blues: blues, delta blues, chicago blues, soul blues
+Soul & Funk: soul, funk, motown, disco, groove
+END_GENRES
+
+sub sync_canonical_genres {
+	my ($self, $text) = @_;
+	$text = DEFAULT_GENRES_TEXT unless defined $text && $text =~ /\S/;
+
+	my @genres = _parse_genres_text($text);
+	my $dbh = $self->dbh;
+
+	my $in_txn = !$dbh->{AutoCommit};
+	$dbh->begin_work unless $in_txn;
+	eval {
+		$dbh->do('DELETE FROM canonical_genres');
+		my $sth = $dbh->prepare(
+			'INSERT INTO canonical_genres (sort_order, label, keywords) VALUES (?, ?, ?)'
+		);
+		my $i = 0;
+		for my $g (@genres) {
+			$sth->execute($i++, $g->{label}, join(',', @{ $g->{keywords} }));
+		}
+		$dbh->commit unless $in_txn;
+	} or do {
+		eval { $dbh->rollback } unless $in_txn;
+		die $@ || 'sync_canonical_genres failed';
+	};
+}
+
+sub list_canonical_genres {
+	my ($self) = @_;
+	my $sth = $self->dbh->prepare(
+		'SELECT label, keywords FROM canonical_genres ORDER BY sort_order ASC'
+	);
+	$sth->execute();
+	my @genres;
+	while (my $row = $sth->fetchrow_hashref) {
+		push @genres, {
+			label    => $row->{label},
+			keywords => [ split /,/, $row->{keywords} ],
+		};
+	}
+	return \@genres;
+}
+
+sub genres_as_text {
+	my ($self) = @_;
+	my $genres = $self->list_canonical_genres();
+	return DEFAULT_GENRES_TEXT unless @$genres;
+	return join("\n", map { "$_->{label}: " . join(', ', @{ $_->{keywords} }) } @$genres) . "\n";
+}
+
+sub _parse_genres_text {
+	my ($text) = @_;
+	my @genres;
+	for my $line (split /\n/, $text) {
+		$line =~ s/^\s+|\s+$//g;
+		next unless $line =~ /\S/;
+		next if $line =~ /^#/;
+		my ($label, $kw_str) = split /:/, $line, 2;
+		next unless defined $kw_str;
+		$label   =~ s/^\s+|\s+$//g;
+		$kw_str  =~ s/^\s+|\s+$//g;
+		next unless length $label && length $kw_str;
+		my @keywords = grep { length $_ } map { s/^\s+|\s+$//gr } split /,/, $kw_str;
+		next unless @keywords;
+		push @genres, { label => $label, keywords => \@keywords };
+	}
+	return @genres;
 }
 
 sub replace_source_stations {
@@ -659,12 +751,35 @@ sub _rebuild_indexes {
 	$dbh->do('DELETE FROM codec_station_index');
 	$dbh->do('DELETE FROM codec_index');
 
+	# Load canonical genres — fall back to defaults if table is empty.
+	my $canonicalRows = $dbh->selectall_arrayref(
+		'SELECT label, keywords FROM canonical_genres ORDER BY sort_order ASC',
+		{ Slice => {} }
+	) || [];
+	if (!@$canonicalRows) {
+		$self->sync_canonical_genres(undef);
+		$canonicalRows = $dbh->selectall_arrayref(
+			'SELECT label, keywords FROM canonical_genres ORDER BY sort_order ASC',
+			{ Slice => {} }
+		) || [];
+	}
+	my @canonicalGenres = map {
+		my $label = $_->{label};
+		my $key   = lc($label);
+		$key =~ s/[^a-z0-9]+/_/g;
+		{
+			key      => $key,
+			label    => $label,
+			keywords => [ map { lc($_) } split /,/, $_->{keywords} ],
+		}
+	} @$canonicalRows;
+
 	my $rows = $dbh->selectall_arrayref(
 		q{SELECT uid, genre, name, bitrate, codec FROM stations},
 		{ Slice => {} }
 	) || [];
 
-	my (%genreCounts, %genreLabel, %genreStationSeen);
+	my (%genreCounts, %genreStationSeen);
 	my (%stationNameCounts, %stationNameLabel, %stationNameStationSeen);
 	my (%qualityCounts, %qualityStationSeen);
 	my (%codecCounts, %codecStationSeen);
@@ -673,12 +788,15 @@ sub _rebuild_indexes {
 		my $uid = $row->{uid};
 		next unless defined $uid && length $uid;
 
-		my $genreTokens = _extract_genre_tokens($row->{genre});
-		for my $token (@$genreTokens) {
-			my ($key, $label) = @$token;
-			next if $genreStationSeen{$key}{$uid}++;
-			$genreCounts{$key}++;
-			$genreLabel{$key} ||= $label;
+		my $rawGenre = lc($row->{genre} || '');
+		for my $cg (@canonicalGenres) {
+			for my $kw (@{ $cg->{keywords} }) {
+				if (index($rawGenre, $kw) >= 0) {
+					next if $genreStationSeen{ $cg->{key} }{$uid}++;
+					$genreCounts{ $cg->{key} }++;
+					last;
+				}
+			}
 		}
 
 		my ($nameKey, $nameLabel) = _normalize_station_name($row->{name});
@@ -702,30 +820,25 @@ sub _rebuild_indexes {
 		}
 	}
 
-	my @genreKeys = sort {
-		$genreCounts{$b} <=> $genreCounts{$a}
-			|| lc($genreLabel{$a}) cmp lc($genreLabel{$b})
-	} grep { $genreCounts{$_} > 10 } keys %genreCounts;
-	@genreKeys = @genreKeys[0 .. 49] if @genreKeys > 50;
-
 	my $insertGenre = $dbh->prepare(
 		'INSERT INTO genre_index (genre_key, genre_label, station_count) VALUES (?, ?, ?)'
 	);
 	my $insertGenreRel = $dbh->prepare(
 		'INSERT INTO genre_station_index (genre_key, station_uid) VALUES (?, ?)'
 	);
-	for my $key (@genreKeys) {
-		$insertGenre->execute($key, $genreLabel{$key}, $genreCounts{$key});
+	for my $cg (@canonicalGenres) {
+		my $key   = $cg->{key};
+		my $count = $genreCounts{$key} || 0;
+		next unless $count;
+		$insertGenre->execute($key, $cg->{label}, $count);
 		for my $uid (keys %{ $genreStationSeen{$key} || {} }) {
 			$insertGenreRel->execute($key, $uid);
 		}
 	}
 
 	my @stationNameKeys = sort {
-		$stationNameCounts{$b} <=> $stationNameCounts{$a}
-			|| lc($stationNameLabel{$a}) cmp lc($stationNameLabel{$b})
-	} grep { $stationNameCounts{$_} > 2 } keys %stationNameCounts;
-	@stationNameKeys = @stationNameKeys[0 .. 49] if @stationNameKeys > 50;
+		lc($stationNameLabel{$a}) cmp lc($stationNameLabel{$b})
+	} keys %stationNameCounts;
 
 	my $insertStationName = $dbh->prepare(
 		'INSERT INTO station_name_index (station_name_key, station_name_label, station_count) VALUES (?, ?, ?)'
@@ -789,67 +902,6 @@ sub _rebuild_indexes {
 	}
 }
 
-sub _extract_genre_tokens {
-	my ($value) = @_;
-	return [] unless defined $value;
-	$value =~ s/^\s+|\s+$//g;
-	return [] unless length $value;
-
-	my @parts = split /\s*(?:,|;|\/|\||&amp;)\s*/i, $value;
-	my @tokens;
-	my %seen;
-	for my $part (@parts) {
-		my ($key, $label) = _canonical_genre_token($part);
-		next unless $key;
-		next if $seen{$key}++;
-		push @tokens, [ $key, $label ];
-	}
-	return \@tokens;
-}
-
-sub _canonical_genre_token {
-	my ($token) = @_;
-	return unless defined $token;
-	$token =~ s/^\s+|\s+$//g;
-	$token =~ s/\s+/ /g;
-	return unless length $token;
-
-	my $key = lc($token);
-	$key =~ s/[^a-z0-9&+ ]+/ /g;
-	$key =~ s/\s+/ /g;
-	$key =~ s/^\s+|\s+$//g;
-	return unless length $key;
-	return if $key =~ /^\d+$/;
-	return if length($key) < 3;
-	return if $key =~ /(?:https?:\/\/|www\.|\.com|\.net|\.org)/;
-
-	my %alias = (
-		'dnb'          => 'drum and bass',
-		'drum n bass'  => 'drum and bass',
-		'drum & bass'  => 'drum and bass',
-		'rnb'          => 'r&b',
-		'r and b'      => 'r&b',
-		'rhythm and blues' => 'r&b',
-		'electro'      => 'electronic',
-		'electronica'  => 'electronic',
-		'edm'          => 'electronic',
-		'hip hop'      => 'hip-hop',
-		'hiphop'       => 'hip-hop',
-	);
-	$key = $alias{$key} if $alias{$key};
-
-	my %stop = map { $_ => 1 } qw(
-		misc other unknown various mix mixed test stream webradio radio online
-		null genre unspecified assorted general general music
-	);
-	return if $stop{$key};
-
-	my $label = _title_case($key);
-	$label =~ s/\bR&b\b/R&B/g;
-	$label =~ s/\bHip-Hop\b/Hip-Hop/g;
-	return ($key, $label);
-}
-
 sub _normalize_station_name {
 	my ($name) = @_;
 	return unless defined $name;
@@ -887,13 +939,6 @@ sub _bitrate_quality {
 	return ('medium', '96-127 kbps') if $bitrate < 128;
 	return ('high', '128-191 kbps') if $bitrate < 192;
 	return ('very_high', '>= 192 kbps');
-}
-
-sub _title_case {
-	my ($text) = @_;
-	return '' unless defined $text;
-	$text =~ s/\b([a-z])/\U$1/g;
-	return $text;
 }
 
 1;
