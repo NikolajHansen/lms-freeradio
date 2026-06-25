@@ -338,7 +338,7 @@ sub list_genre_index {
 	my $sth = $self->dbh->prepare(q{
 		SELECT genre_key, genre_label, station_count
 		FROM genre_index
-		ORDER BY station_count DESC, genre_label COLLATE NOCASE ASC
+		ORDER BY genre_label COLLATE NOCASE ASC
 	});
 	$sth->execute();
 
@@ -379,7 +379,7 @@ sub list_station_name_index {
 	my $sth = $self->dbh->prepare(q{
 		SELECT station_name_key, station_name_label, station_count
 		FROM station_name_index
-		ORDER BY station_count DESC, station_name_label COLLATE NOCASE ASC
+		ORDER BY station_name_label COLLATE NOCASE ASC
 	});
 	$sth->execute();
 
@@ -461,7 +461,7 @@ sub list_codec_index {
 	my $sth = $self->dbh->prepare(q{
 		SELECT codec_key, codec_label, station_count
 		FROM codec_index
-		ORDER BY station_count DESC, codec_label COLLATE NOCASE ASC
+		ORDER BY codec_label COLLATE NOCASE ASC
 	});
 	$sth->execute();
 
